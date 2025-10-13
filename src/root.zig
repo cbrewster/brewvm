@@ -1,23 +1,75 @@
-//! By convention, root.zig is the root source file when making a library.
 const std = @import("std");
+const linux = std.os.linux;
+const c = @import("c.zig").c;
 
-pub fn bufferedPrint() !void {
-    // Stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    var stdout_buffer: [1024]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
-    const stdout = &stdout_writer.interface;
+const Kvm = @import("kvm.zig").Kvm;
 
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
+const PageTables = struct {
+    const PML4: usize = 0x1000;
+    const PDPT: usize = 0x2000;
+    const PD: usize = 0x3000;
+};
 
-    try stdout.flush(); // Don't forget to flush!
-}
+const PageFlag = struct {
+    const Present: u64 = 1 << 0;
+    const ReadWrite: u64 = 1 << 1;
+    const UserSupervisor: u64 = 1 << 2;
+    const PageWriteThrough: u64 = 1 << 3;
+    const PageCacheDisable: u64 = 1 << 4;
+    const Accessed: u64 = 1 << 5;
+    const Dirty: u64 = 1 << 6;
+    const PageSize: u64 = 1 << 7;
+    const Global: u64 = 1 << 8;
+    const NoExecute: u64 = 1 << 63;
+};
 
-pub fn add(a: i32, b: i32) i32 {
-    return a + b;
-}
+const SegmentFlags = struct {
+    const Accessed: u8 = 1 << 0;
+    const CodeRead: u8 = 1 << 1;
+    const CodeSegment: u8 = 1 << 3;
 
-test "basic add functionality" {
-    try std.testing.expect(add(3, 7) == 10);
+    const DataWrite: u8 = 1 << 1;
+};
+
+const Cr0Flags = struct {
+    const ProtectionEnable: u64 = 1 << 0;
+    const ExtensionType: u64 = 1 << 4;
+    const NumericError: u64 = 1 << 5;
+    const Paging: u64 = 1 << 31;
+};
+
+const Cr4Flags = struct {
+    const PageSizeExtension: u64 = 1 << 7;
+    const PhysicalAddressExtension: u64 = 1 << 5;
+};
+
+const EferFlags = struct {
+    const LongModeEnable: u64 = 1 << 8;
+    const LongModeActive: u64 = 1 << 10;
+};
+
+const KvmUserspaceMemoryRegion = extern struct {
+    slot: u32,
+    flags: u32,
+    guest_phys_addr: u64,
+    memory_size: u64, // bytes
+    userspace_addr: u64, // start of the userspace allocated memory
+};
+
+pub fn startVm(gpa: std.mem.Allocator) !void {
+    var kvm = try Kvm.init(gpa);
+    defer kvm.deinit();
+
+    var vm = try kvm.create_vm();
+    defer vm.deinit();
+
+    try vm.load_kernel(
+        "console=ttyS0 earlyprintk=ttyS0 rdinit=/init",
+        "result/bzImage",
+        "initramfs",
+    );
+
+    try vm.setup_paging();
+
+    try vm.run();
 }
