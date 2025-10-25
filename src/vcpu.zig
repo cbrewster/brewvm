@@ -89,6 +89,14 @@ pub const Vcpu = struct {
                         data_ptr[0] = 0x20;
                     }
                 },
+                c.KVM_EXIT_MMIO => {
+                    const mmio = kvm_run_data.*.unnamed_0.mmio;
+                    std.debug.print("==> KVM_EXIT_MMIO: phys_addr=0x{X}, data_size={}, is_write={}\n", .{
+                        mmio.phys_addr,
+                        mmio.len,
+                        mmio.is_write,
+                    });
+                },
                 else => {
                     std.debug.print("Unhandled KVM exit reason: {}\n", .{kvm_run_data.exit_reason});
                     return error.UnhandledKvmExit;

@@ -18,8 +18,6 @@ const kvm_set_tss_addr = ioctl.IoctlW(c.KVM_SET_TSS_ADDR, usize);
 
 const MAPPING_SIZE: usize = 1 << 30;
 
-const CMDLINE = "console=ttyS0 earlyprintk=ttyS0 rdinit=/init";
-
 const ADDR_BOOT_PARAMS: usize = 0x10000;
 const ADDR_CMDLINE: usize = 0x20000;
 const ADDR_KERNEL32: usize = 0x100000;
