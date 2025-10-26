@@ -2,6 +2,8 @@ const std = @import("std");
 const linux = std.os.linux;
 const ioctl = @import("ioctl.zig");
 const c = @import("c.zig").c;
+const layout = @import("layout.zig");
+const Vm = @import("vm.zig").Vm;
 
 const kvm_run = ioctl.Ioctl(c.KVM_RUN);
 const kvm_set_cpuid2 = ioctl.IoctlW(c.KVM_SET_CPUID2, *const c.kvm_cpuid2);
@@ -48,7 +50,7 @@ pub const Vcpu = struct {
         _ = try kvm_set_sregs(self.vcpu_fd, &sregs);
     }
 
-    pub fn run(self: *Vcpu) !void {
+    pub fn run(self: *Vcpu, vm: *Vm) !void {
         var buffer: [4096]u8 = undefined;
         var buffer_len: usize = 0;
 
@@ -90,12 +92,33 @@ pub const Vcpu = struct {
                     }
                 },
                 c.KVM_EXIT_MMIO => {
-                    const mmio = kvm_run_data.*.unnamed_0.mmio;
-                    std.debug.print("==> KVM_EXIT_MMIO: phys_addr=0x{X}, data_size={}, is_write={}\n", .{
-                        mmio.phys_addr,
-                        mmio.len,
-                        mmio.is_write,
-                    });
+                    const mmio = &kvm_run_data.*.unnamed_0.mmio;
+                    const phys_addr = mmio.phys_addr;
+                    const is_write = mmio.is_write != 0;
+
+                    // Check if this is accessing our virtio-mmio device
+                    if (phys_addr >= vm.mmio_device.base_addr and
+                        phys_addr < vm.mmio_device.base_addr + layout.VIRTIO_MMIO_DEVICE_SIZE)
+                    {
+                        const offset = phys_addr - layout.VIRTIO_MMIO_BASE;
+
+                        // We assume all MMIO read and writes are word-sized.
+                        std.debug.assert(mmio.len == 4);
+
+                        if (is_write) {
+                            // Handle MMIO write
+                            var value: u32 = 0;
+                            for (0..@min(mmio.len, 4)) |i| {
+                                value |= @as(u32, mmio.data[i]) << @intCast(i * 8);
+                            }
+                            vm.mmio_device.write(offset, value);
+                        } else {
+                            // Handle MMIO read
+                            const value = vm.mmio_device.read(offset);
+                            // Write the value back to the guest
+                            std.mem.writeInt(u32, mmio.data[0..4], value, .little);
+                        }
+                    }
                 },
                 else => {
                     std.debug.print("Unhandled KVM exit reason: {}\n", .{kvm_run_data.exit_reason});

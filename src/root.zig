@@ -12,7 +12,7 @@ pub fn startVm(gpa: std.mem.Allocator) !void {
     defer vm.deinit();
 
     try vm.load_kernel(
-        "console=hvc0 console=ttyS0 earlyprintk=ttyS0 rdinit=/init virtio_mmio.device=4k@0xa0000000:48",
+        "console=hvc0 earlyprintk=serial loglevel=8 rdinit=/init",
         "result/bzImage",
         "initramfs",
     );

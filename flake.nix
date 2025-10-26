@@ -26,6 +26,8 @@
           zig
           zls
           nasm
+          u-root
+          go
         ];
       };
     }

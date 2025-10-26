@@ -5,7 +5,9 @@ const Vcpu = @import("vcpu.zig").Vcpu;
 const getBootParams = @import("kernel.zig").getBootParams;
 const paging = @import("paging.zig");
 const PageTables: usize = paging.PageTables;
+const layout = @import("layout.zig");
 const c = @import("c.zig").c;
+const mmio = @import("virtio/transport/mmio.zig");
 
 const kvm_create_irqchip = ioctl.Ioctl(c.KVM_CREATE_IRQCHIP);
 const kvm_crate_pit2 = ioctl.IoctlW(c.KVM_CREATE_PIT2, *const c.kvm_pit_config);
@@ -23,11 +25,15 @@ const ADDR_CMDLINE: usize = 0x20000;
 const ADDR_KERNEL32: usize = 0x100000;
 const ADDR_INITRAMFS: usize = 0xf000000;
 
+const E820_RAM: u32 = 0x1;
+const E820_RESERVED: u32 = 0x2;
+
 pub const Vm = struct {
     vm_fd: std.os.linux.fd_t,
     vcpu: Vcpu,
     guest_memory: []align(4096) u8,
     supported_cpuid: *c.kvm_cpuid2,
+    mmio_device: mmio.MmioTransport,
 
     pub fn init(
         vm_fd: linux.fd_t,
@@ -62,11 +68,22 @@ pub const Vm = struct {
         );
         errdefer std.posix.munmap(guest_memory);
 
+        // Initialize a virtio console device (device ID = 3)
+        const mmio_device = mmio.MmioTransport.init(
+            guest_memory,
+            vm_fd,
+            5,
+            layout.VIRTIO_MMIO_BASE,
+            mmio.DeviceId.CONSOLE,
+            .{},
+        );
+
         return .{
             .vm_fd = vm_fd,
             .vcpu = vcpu,
             .guest_memory = guest_memory,
             .supported_cpuid = supported_cpuid,
+            .mmio_device = mmio_device,
         };
     }
 
@@ -78,10 +95,19 @@ pub const Vm = struct {
 
     pub fn load_kernel(
         self: *Vm,
-        cmdline: []const u8,
+        base_cmdline: []const u8,
         kernel_path: []const u8,
         initramfs_path: []const u8,
     ) !void {
+        // Build full command line with virtio device parameters
+        var cmdline_buf: [2048]u8 = undefined;
+        const virtio_params = try std.fmt.bufPrint(&cmdline_buf, "{s} virtio_mmio.device=0x{X}@0x{X}:{d}", .{
+            base_cmdline,
+            layout.VIRTIO_MMIO_DEVICE_SIZE,
+            self.mmio_device.base_addr,
+            5, // IRQ number (must be 0-23 for KVM irqchip)
+        });
+        const cmdline = virtio_params;
         const vmlinux_file = try std.fs.cwd().openFile(kernel_path, .{ .mode = .read_only });
         defer vmlinux_file.close();
         const vmlinux_stat = try vmlinux_file.stat();
@@ -98,17 +124,17 @@ pub const Vm = struct {
             &.{
                 .{
                     .addr = 0,
-                    .size = 0x9fc00,
-                    .type = 1,
+                    .size = layout.SYSTEM_MEM_START,
+                    .type = E820_RAM,
                 },
                 .{
-                    .addr = 0x9fc00,
-                    .size = 1 << 10,
-                    .type = 2,
+                    .addr = layout.SYSTEM_MEM_START,
+                    .size = layout.SYSTEM_MEM_SIZE,
+                    .type = E820_RESERVED,
                 },
                 .{
-                    .addr = 0x100000,
-                    .size = @as(u64, @intCast(MAPPING_SIZE)) - 0x100000,
+                    .addr = layout.HIMEM_START,
+                    .size = @as(u64, @intCast(MAPPING_SIZE)) - layout.HIMEM_START,
                     .type = 1,
                 },
             },
@@ -162,6 +188,6 @@ pub const Vm = struct {
     }
 
     pub fn run(self: *Vm) !void {
-        try self.vcpu.run();
+        try self.vcpu.run(self);
     }
 };
