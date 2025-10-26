@@ -8,6 +8,7 @@ const PageTables: usize = paging.PageTables;
 const layout = @import("layout.zig");
 const c = @import("c.zig").c;
 const mmio = @import("virtio/transport/mmio.zig");
+const Console = @import("virtio/devices/console.zig").Console;
 
 const kvm_create_irqchip = ioctl.Ioctl(c.KVM_CREATE_IRQCHIP);
 const kvm_crate_pit2 = ioctl.IoctlW(c.KVM_CREATE_PIT2, *const c.kvm_pit_config);
@@ -29,13 +30,16 @@ const E820_RAM: u32 = 0x1;
 const E820_RESERVED: u32 = 0x2;
 
 pub const Vm = struct {
+    gpa: std.mem.Allocator,
     vm_fd: std.os.linux.fd_t,
     vcpu: Vcpu,
     guest_memory: []align(4096) u8,
     supported_cpuid: *c.kvm_cpuid2,
     mmio_device: mmio.MmioTransport,
+    epoll_fd: linux.fd_t,
 
     pub fn init(
+        gpa: std.mem.Allocator,
         vm_fd: linux.fd_t,
         vcpu_mmap_size: usize,
         supported_cpuid: *c.kvm_cpuid2,
@@ -68,26 +72,38 @@ pub const Vm = struct {
         );
         errdefer std.posix.munmap(guest_memory);
 
+        const stdout = std.fs.File.stdout();
+        const stdin = std.fs.File.stdin();
+
         // Initialize a virtio console device (device ID = 3)
-        const mmio_device = mmio.MmioTransport.init(
+        var mmio_device = try mmio.MmioTransport.init(
             guest_memory,
             vm_fd,
             5,
             layout.VIRTIO_MMIO_BASE,
             mmio.DeviceId.CONSOLE,
-            .{},
+            try Console.init(stdout, stdin),
         );
 
+        const epoll_fd = try std.posix.epoll_create1(linux.EPOLL.CLOEXEC);
+        errdefer std.posix.close(epoll_fd);
+
+        try mmio_device.registerIoEventFd(vm_fd);
+        try mmio_device.registerEpoll(epoll_fd);
+
         return .{
+            .gpa = gpa,
             .vm_fd = vm_fd,
             .vcpu = vcpu,
             .guest_memory = guest_memory,
             .supported_cpuid = supported_cpuid,
             .mmio_device = mmio_device,
+            .epoll_fd = epoll_fd,
         };
     }
 
     pub fn deinit(self: *const Vm) void {
+        std.posix.close(self.epoll_fd);
         std.posix.munmap(self.guest_memory);
         self.vcpu.deinit();
         std.posix.close(self.vm_fd);
@@ -188,6 +204,24 @@ pub const Vm = struct {
     }
 
     pub fn run(self: *Vm) !void {
+        const io_thread = try std.Thread.spawn(.{}, ioThread, .{self});
+        defer io_thread.join();
+
         try self.vcpu.run(self);
+    }
+
+    fn ioThread(self: *Vm) !void {
+        while (true) {
+            var events: [1]linux.epoll_event = undefined;
+            while (true) {
+                const n = std.posix.epoll_wait(self.epoll_fd, &events, -1);
+                if (n == 0) continue;
+
+                for (events) |event| {
+                    self.mmio_device.handleEvent(event) catch |err|
+                        std.log.err("Failed to handle event: {}", .{err});
+                }
+            }
+        }
     }
 };

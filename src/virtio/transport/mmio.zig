@@ -7,6 +7,8 @@ const c = @import("../../c.zig").c;
 const linux = std.os.linux;
 
 const kvm_irq_line = ioctl.IoctlW(c.KVM_IRQ_LINE, *const c.kvm_irq_level);
+const kvm_ioeventfd = ioctl.IoctlW(c.KVM_IOEVENTFD, *const c.kvm_ioeventfd);
+const kvm_irqfd = ioctl.IoctlW(c.KVM_IRQFD, *const c.kvm_irqfd);
 
 const Console = @import("../devices/console.zig").Console;
 const DeviceFeatures = @import("../devices/flags.zig").DeviceFeatures;
@@ -93,23 +95,27 @@ pub const Interrupt = struct {
     pub const VIRTIO_MMIO_INT_CONFIG: u32 = 0x02;
 
     irq: u32,
+    irq_eventfd: linux.fd_t,
     irq_status: u32,
-    vm_fd: linux.fd_t,
+
+    pub fn init() !Interrupt {
+        return .{
+            .irq = 0,
+            .irq_status = 0,
+            .irq_eventfd = try std.posix.eventfd(0, linux.EFD.CLOEXEC | linux.EFD.NONBLOCK),
+        };
+    }
 
     pub fn trigger(self: *Interrupt, status: u32) !void {
         std.log.debug("    <- IRQ Trigger\n", .{});
         self.irq_status = status;
-        _ = try kvm_irq_line(self.vm_fd, &.{
-            .unnamed_0 = .{
-                .irq = self.irq,
-            },
-            .level = 1,
-        });
-        _ = try kvm_irq_line(self.vm_fd, &.{
-            .unnamed_0 = .{
-                .irq = self.irq,
-            },
-            .level = 0,
+        _ = try std.posix.write(self.irq_eventfd, &[8]u8{ 0, 0, 0, 0, 0, 0, 0, 1 });
+    }
+
+    fn register(self: *Interrupt, vm_fd: linux.fd_t, irq: u32) !void {
+        _ = try kvm_irqfd(vm_fd, &.{
+            .fd = @intCast(self.irq_eventfd),
+            .gsi = irq,
         });
     }
 };
@@ -151,7 +157,10 @@ pub const MmioTransport = struct {
         base_addr: u64,
         device_id: u32,
         device: Console,
-    ) MmioTransport {
+    ) !MmioTransport {
+        var interrupt = try Interrupt.init();
+        try interrupt.register(vm_fd, irq);
+
         return .{
             .base_addr = base_addr,
             .device_id = device_id,
@@ -163,14 +172,39 @@ pub const MmioTransport = struct {
             .queue_sel = 0,
             .queue_size = 0,
             .guest_memory = guest_memory,
-            .interrupt = .{
-                .irq_status = 0,
-                .irq = irq,
-                .vm_fd = vm_fd,
-            },
+            .interrupt = interrupt,
             .device = device,
             .device_lock = .{},
         };
+    }
+
+    pub fn registerIoEventFd(self: *MmioTransport, vm_fd: linux.fd_t) !void {
+        for (self.device.getQueues(), 0..) |*queue, i| {
+            _ = try kvm_ioeventfd(vm_fd, &.{
+                .addr = self.base_addr + Registers.QUEUE_NOTIFY,
+                .datamatch = i,
+                .len = 4,
+                .fd = queue.eventfd,
+                .flags = c.KVM_IOEVENTFD_FLAG_DATAMATCH,
+            });
+        }
+    }
+
+    pub fn registerEpoll(self: *MmioTransport, epoll_fd: linux.fd_t) !void {
+        try self.device.registerEpoll(epoll_fd);
+    }
+
+    pub fn handleEvent(self: *MmioTransport, event: linux.epoll_event) !void {
+        self.device_lock.lock();
+        defer self.device_lock.unlock();
+
+        const queues = self.device.getQueues();
+        var buf: [8]u8 = undefined;
+        if (event.data.u64 < queues.len) {
+            _ = try std.posix.read(queues[event.data.u64].eventfd, &buf);
+        }
+
+        self.device.processEvent(event.data.u64, self.guest_memory, &self.interrupt);
     }
 
     pub fn set_device_status(self: *MmioTransport, new_status: u32) void {
@@ -303,11 +337,11 @@ pub const MmioTransport = struct {
                 self.device_lock.lock();
                 defer self.device_lock.unlock();
 
-                self.device.processQueue(value, self.guest_memory, &self.interrupt);
+                self.device.processEvent(value, self.guest_memory, &self.interrupt);
             },
             Registers.INTERRUPT_ACK => {
                 std.log.debug("    -> INTERRUPT_ACK\n", .{});
-                // Driver is acknowledging interrupts
+                self.interrupt.irq_status &= ~value;
             },
             Registers.STATUS => {
                 std.log.debug("    -> STATUS = 0b{b}\n", .{value});
@@ -315,27 +349,27 @@ pub const MmioTransport = struct {
             },
             Registers.QUEUE_DESC_LOW => {
                 std.log.debug("    -> QUEUE_DESC_LOW = 0x{X}\n", .{value});
-                self.device.getQueue(self.queue_sel).set_field("desc_table_address", value, .low);
+                self.device.getQueue(self.queue_sel).setField("desc_table_address", value, .low);
             },
             Registers.QUEUE_DESC_HIGH => {
                 std.log.debug("    -> QUEUE_DESC_HIGH = 0x{X}\n", .{value});
-                self.device.getQueue(self.queue_sel).set_field("desc_table_address", value, .high);
+                self.device.getQueue(self.queue_sel).setField("desc_table_address", value, .high);
             },
             Registers.QUEUE_DRIVER_LOW => {
                 std.log.debug("    -> QUEUE_DRIVER_LOW = 0x{X}\n", .{value});
-                self.device.getQueue(self.queue_sel).set_field("avail_ring_address", value, .low);
+                self.device.getQueue(self.queue_sel).setField("avail_ring_address", value, .low);
             },
             Registers.QUEUE_DRIVER_HIGH => {
                 std.log.debug("    -> QUEUE_DRIVER_HIGH = 0x{X}\n", .{value});
-                self.device.getQueue(self.queue_sel).set_field("avail_ring_address", value, .high);
+                self.device.getQueue(self.queue_sel).setField("avail_ring_address", value, .high);
             },
             Registers.QUEUE_DEVICE_LOW => {
                 std.log.debug("    -> QUEUE_DEVICE_LOW = 0x{X}\n", .{value});
-                self.device.getQueue(self.queue_sel).set_field("used_ring_address", value, .low);
+                self.device.getQueue(self.queue_sel).setField("used_ring_address", value, .low);
             },
             Registers.QUEUE_DEVICE_HIGH => {
                 std.log.debug("    -> QUEUE_DEVICE_HIGH = 0x{X}\n", .{value});
-                self.device.getQueue(self.queue_sel).set_field("used_ring_address", value, .high);
+                self.device.getQueue(self.queue_sel).setField("used_ring_address", value, .high);
             },
             else => {
                 std.log.debug("    -> UNHANDLED\n", .{});

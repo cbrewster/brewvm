@@ -1,10 +1,13 @@
 const std = @import("std");
+const linux = std.os.linux;
 
 const USED_SIZE: u32 = 2 * @sizeOf(u32);
 const AVAILABLE_SIZE: u32 = @sizeOf(u16);
 
 pub const Queue = struct {
     const Self = @This();
+
+    eventfd: std.posix.fd_t,
 
     // Max size offered by the device
     max_size: u16,
@@ -26,7 +29,26 @@ pub const Queue = struct {
     next_avail: u16 = 0,
     next_used: u16 = 0,
 
-    pub fn initialize(
+    pub fn init(max_size: u16) !Self {
+        const eventfd = try std.posix.eventfd(0, linux.EFD.CLOEXEC | linux.EFD.NONBLOCK);
+
+        return .{
+            .eventfd = eventfd,
+            .max_size = max_size,
+            .size = max_size,
+            .ready = false,
+        };
+    }
+
+    pub fn registerEpoll(self: *Self, epoll_fd: linux.fd_t, user_data: u64) !void {
+        var event = linux.epoll_event{
+            .events = linux.EPOLL.IN,
+            .data = .{ .u64 = user_data },
+        };
+        try std.posix.epoll_ctl(epoll_fd, linux.EPOLL.CTL_ADD, self.eventfd, &event);
+    }
+
+    pub fn activate(
         self: *Self,
         guest_memory: []align(4096) u8,
     ) !void {
@@ -39,72 +61,67 @@ pub const Queue = struct {
             return error.InvalidQueueSize;
         }
 
-        self.desc_table_ptr = @ptrCast(@alignCast(guest_memory[self.desc_table_address..][0..self.desc_table_size()]));
-        self.avail_ring_ptr = @ptrCast(@alignCast(guest_memory[self.avail_ring_address..][0..self.avail_ring_size()]));
-        self.used_ring_ptr = @ptrCast(@alignCast(guest_memory[self.used_ring_address..][0..self.used_ring_size()]));
+        self.desc_table_ptr = @ptrCast(@alignCast(guest_memory[self.desc_table_address..][0..self.descTableSize()]));
+        self.avail_ring_ptr = @ptrCast(@alignCast(guest_memory[self.avail_ring_address..][0..self.availRingSize()]));
+        self.used_ring_ptr = @ptrCast(@alignCast(guest_memory[self.used_ring_address..][0..self.usedRingSize()]));
     }
 
-    fn desc_table_size(self: *const Self) u32 {
+    fn descTableSize(self: *const Self) u32 {
         return @sizeOf(Descriptor) * self.size;
     }
 
-    fn avail_ring_size(self: *const Self) u32 {
+    fn availRingSize(self: *const Self) u32 {
         return 3 * @sizeOf(u16) + AVAILABLE_SIZE * self.size;
     }
 
-    fn used_ring_size(self: *const Self) u32 {
+    fn usedRingSize(self: *const Self) u32 {
         return 3 * @sizeOf(u16) + USED_SIZE * self.size;
     }
 
     /// Get avail_ring.idx
-    pub fn avail_ring_get_idx(self: *const Self, comptime fence: bool) u16 {
-        if (fence) return @atomicLoad(u16, self.avail_ring_ptr[1].ptr, .acquire);
-
-        return self.avail_ring_ptr[1];
+    pub fn availRingGetIdx(self: *const Self) u16 {
+        return @atomicLoad(u16, &self.avail_ring_ptr[1], .acquire);
     }
 
-    pub fn used_ring_set_idx(self: *Self, idx: u16) void {
+    pub fn usedRingSetIdx(self: *Self, idx: u16) void {
         std.log.debug("set used ring idx={}", .{idx});
         const idx_ptr: *volatile u16 = @ptrCast(self.used_ring_ptr[@sizeOf(u16)..]);
-        idx_ptr.* = idx;
+        @atomicStore(u16, idx_ptr, idx, .release);
     }
 
-    pub fn add_used(self: *Self, idx: u32, len: u32) void {
+    pub fn addUsed(self: *Self, idx: u32, len: u32) void {
         const used_idx = self.next_used % self.size;
 
-        const offset = 2 * @sizeOf(u16) + USED_SIZE * used_idx % self.size;
+        const offset = 2 * @sizeOf(u16) + USED_SIZE * used_idx;
         const id_ptr: *align(4) volatile u32 = @ptrCast(@alignCast(self.used_ring_ptr[offset..]));
         id_ptr.* = idx;
         const len_ptr: *align(4) volatile u32 = @ptrCast(@alignCast(self.used_ring_ptr[offset + @sizeOf(u32) ..]));
         len_ptr.* = len;
 
         self.next_used +%= 1;
-        self.used_ring_set_idx(self.next_used);
+        self.usedRingSetIdx(self.next_used);
     }
 
-    /// Get descriptor at index avail_ring.ring[idx]
-    pub fn avail_ring_get_desc(self: *const Self, idx: u16) *volatile Descriptor {
-        const desc_idx = self.avail_ring_ptr[idx + 2];
-        return &self.desc_table_ptr[desc_idx];
+    pub fn availRingGetDescIdx(self: *const Self, idx: u16) u16 {
+        return self.avail_ring_ptr[idx + 2];
     }
 
-    pub fn avail_len(self: *Self) u16 {
-        return self.avail_ring_get_idx(false) -% self.next_avail;
+    pub fn availLen(self: *Self) u16 {
+        return self.availRingGetIdx() -% self.next_avail;
     }
 
     pub fn pop(self: *Self) ?DescriptorChain {
-        const len = self.avail_len();
+        const len = self.availLen();
         std.debug.assert(len <= self.size);
 
         if (len == 0) return null;
 
         const idx = self.next_avail % self.size;
-        const desc = self.avail_ring_get_desc(idx);
         self.next_avail +%= 1;
-        return DescriptorChain.init(desc, idx);
+        return DescriptorChain.init(self.desc_table_ptr, self.availRingGetDescIdx(idx));
     }
 
-    pub fn set_field(
+    pub fn setField(
         self: *Self,
         comptime field_name: []const u8,
         value: u32,
@@ -150,18 +167,38 @@ pub const Descriptor = packed struct {
 };
 
 pub const DescriptorChain = struct {
-    descriptor_ptr: *volatile Descriptor,
+    desc_table: []volatile Descriptor,
 
-    addr: u64,
+    addr: u64 = 0,
     len: u32,
     idx: u16,
+    next: u16,
+    flags: DescriptorFlags,
 
-    fn init(desc_ptr: *volatile Descriptor, idx: u16) DescriptorChain {
+    fn init(desc_table: []volatile Descriptor, idx: u16) DescriptorChain {
+        const desc = &desc_table[idx];
         return .{
-            .descriptor_ptr = desc_ptr,
+            .desc_table = desc_table,
             .idx = idx,
-            .addr = desc_ptr.addr,
-            .len = desc_ptr.len,
+            .addr = desc.addr,
+            .len = desc.len,
+            .next = desc.next,
+            .flags = desc.flags,
         };
+    }
+
+    pub fn hasNext(self: DescriptorChain) bool {
+        return self.flags.virtq_desc_f_next;
+    }
+
+    pub fn isWriteOnly(self: DescriptorChain) bool {
+        return self.flags.virtq_desc_f_write;
+    }
+
+    pub fn getNext(self: *const DescriptorChain) ?DescriptorChain {
+        if (self.hasNext()) {
+            return DescriptorChain.init(self.desc_table, self.next);
+        }
+        return null;
     }
 };

@@ -24,7 +24,7 @@ pub const Kvm = struct {
         const supported_cpuid_entries = 80;
         const supported_cpuid_buf = try gpa.allocWithOptions(
             u8,
-            @sizeOf(c.kvm_cpuid2) + @sizeOf(c.kvm_cpuid_entry2) * (supported_cpuid_entries - 1),
+            @sizeOf(c.kvm_cpuid2) + @sizeOf(c.kvm_cpuid_entry2) * (supported_cpuid_entries),
             std.mem.Alignment.of(c.kvm_cpuid2).max(std.mem.Alignment.of(c.kvm_cpuid_entry2)),
             null,
         );
@@ -51,7 +51,12 @@ pub const Kvm = struct {
         const vm_fd: std.posix.fd_t = @intCast(try kvm_create_vm(self.kvm_fd));
         errdefer std.posix.close(vm_fd);
 
-        return try Vm.init(vm_fd, self.vcpu_mmap_size, self.supported_cpuid);
+        return try Vm.init(
+            self.gpa,
+            vm_fd,
+            self.vcpu_mmap_size,
+            self.supported_cpuid,
+        );
     }
 
     pub fn deinit(self: *const Kvm) void {
