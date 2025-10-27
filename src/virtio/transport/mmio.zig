@@ -204,7 +204,7 @@ pub const MmioTransport = struct {
             _ = try std.posix.read(queues[event.data.u64].eventfd, &buf);
         }
 
-        self.device.processEvent(event.data.u64, self.guest_memory, &self.interrupt);
+        try self.device.processEvent(event.data.u64, self.guest_memory, &self.interrupt);
     }
 
     pub fn set_device_status(self: *MmioTransport, new_status: u32) void {
@@ -331,13 +331,6 @@ pub const MmioTransport = struct {
             Registers.QUEUE_READY => {
                 std.log.debug("    -> QUEUE_READY = {}\n", .{value != 0});
                 self.device.getQueue(self.queue_sel).ready = value != 0;
-            },
-            Registers.QUEUE_NOTIFY => {
-                std.log.debug("    -> QUEUE_NOTIFY = {}\n", .{value});
-                self.device_lock.lock();
-                defer self.device_lock.unlock();
-
-                self.device.processEvent(value, self.guest_memory, &self.interrupt);
             },
             Registers.INTERRUPT_ACK => {
                 std.log.debug("    -> INTERRUPT_ACK\n", .{});

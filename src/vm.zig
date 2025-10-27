@@ -82,7 +82,7 @@ pub const Vm = struct {
             5,
             layout.VIRTIO_MMIO_BASE,
             mmio.DeviceId.CONSOLE,
-            try Console.init(stdout, stdin),
+            try Console.init(gpa, stdout, stdin),
         );
 
         const epoll_fd = try std.posix.epoll_create1(linux.EPOLL.CLOEXEC);

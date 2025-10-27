@@ -111,6 +111,8 @@ pub const Queue = struct {
     }
 
     pub fn pop(self: *Self) ?DescriptorChain {
+        if (!self.ready) return null;
+
         const len = self.availLen();
         std.debug.assert(len <= self.size);
 
@@ -136,7 +138,7 @@ pub const Queue = struct {
     }
 };
 
-pub const DescriptorFlags = packed struct {
+pub const DescriptorFlags = packed struct(u16) {
     /// This marks a buffer as continuing via the next field.
     virtq_desc_f_next: bool = false,
     /// This marks a buffer as device write-only (otherwise device read-only).
@@ -145,13 +147,9 @@ pub const DescriptorFlags = packed struct {
     virtq_desc_f_indirect: bool = false,
 
     _: u13 = 0,
-
-    comptime {
-        std.debug.assert(@bitSizeOf(@This()) == 16);
-    }
 };
 
-pub const Descriptor = packed struct {
+pub const Descriptor = packed struct(u128) {
     /// Address (guest-physical)
     addr: u64,
     /// Length
@@ -160,10 +158,6 @@ pub const Descriptor = packed struct {
     flags: DescriptorFlags,
     /// Next field if flags & NEXT
     next: u16,
-
-    comptime {
-        std.debug.assert(@alignOf(@This()) == 16);
-    }
 };
 
 pub const DescriptorChain = struct {
@@ -200,5 +194,70 @@ pub const DescriptorChain = struct {
             return DescriptorChain.init(self.desc_table, self.next);
         }
         return null;
+    }
+
+    pub fn writer(self: DescriptorChain) Writer {
+        return .init(self);
+    }
+};
+
+pub const Writer = struct {
+    chain: DescriptorChain,
+    bytes_written: u32,
+
+    current_desc_idx: ?u16,
+    current_desc_bytes_written: usize,
+
+    fn init(chain: DescriptorChain) Writer {
+        var current_desc_idx: ?u16 = chain.idx;
+        while (!chain.desc_table[current_desc_idx.?].flags.virtq_desc_f_write) {
+            if (chain.desc_table[current_desc_idx.?].flags.virtq_desc_f_next) {
+                current_desc_idx = chain.desc_table[current_desc_idx.?].next;
+            } else {
+                current_desc_idx = null;
+                break;
+            }
+        }
+
+        return .{
+            .chain = chain,
+            .bytes_written = 0,
+            .current_desc_idx = chain.idx,
+            .current_desc_bytes_written = 0,
+        };
+    }
+
+    pub fn write(
+        self: *Writer,
+        guest_memory: []align(4096) u8,
+        bytes: []const u8,
+    ) void {
+        var bytes_index: usize = 0;
+
+        while (bytes_index < bytes.len) {
+            const current_desc_idx = self.current_desc_idx orelse return;
+
+            const current_desc = &self.chain.desc_table[current_desc_idx];
+            const index = self.current_desc_bytes_written;
+            const bytes_left = @min(bytes.len, current_desc.len - index);
+
+            if (bytes_left == 0) {
+                self.current_desc_bytes_written = 0;
+                if (!current_desc.flags.virtq_desc_f_next) {
+                    self.current_desc_idx = null;
+                    return;
+                }
+                self.current_desc_idx = current_desc.next;
+                continue;
+            }
+
+            @memcpy(
+                guest_memory[current_desc.addr + index ..][0..bytes_left],
+                bytes[bytes_index..][0..bytes_left],
+            );
+            bytes_index += bytes_left;
+            self.current_desc_bytes_written += bytes_left;
+            self.bytes_written += @intCast(bytes_left);
+        }
     }
 };
