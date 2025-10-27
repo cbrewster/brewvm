@@ -106,6 +106,10 @@ pub const Interrupt = struct {
         };
     }
 
+    pub fn deinit(self: *Interrupt) void {
+        std.posix.close(self.irq_eventfd);
+    }
+
     pub fn trigger(self: *Interrupt, status: u32) !void {
         std.log.debug("    <- IRQ Trigger\n", .{});
         self.irq_status = status;
@@ -176,6 +180,11 @@ pub const MmioTransport = struct {
             .device = device,
             .device_lock = .{},
         };
+    }
+
+    pub fn deinit(self: *MmioTransport) void {
+        self.device.deinit();
+        self.interrupt.deinit();
     }
 
     pub fn registerIoEventFd(self: *MmioTransport, vm_fd: linux.fd_t) !void {

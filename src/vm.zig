@@ -84,6 +84,7 @@ pub const Vm = struct {
             mmio.DeviceId.CONSOLE,
             try Console.init(gpa, stdout, stdin),
         );
+        errdefer mmio_device.deinit();
 
         const epoll_fd = try std.posix.epoll_create1(linux.EPOLL.CLOEXEC);
         errdefer std.posix.close(epoll_fd);
@@ -102,7 +103,8 @@ pub const Vm = struct {
         };
     }
 
-    pub fn deinit(self: *const Vm) void {
+    pub fn deinit(self: *Vm) void {
+        self.mmio_device.deinit();
         std.posix.close(self.epoll_fd);
         std.posix.munmap(self.guest_memory);
         self.vcpu.deinit();
