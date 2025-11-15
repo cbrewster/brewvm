@@ -15,10 +15,13 @@ pub const Vcpu = struct {
     kvm_run_mapping: []align(4096) u8,
 
     pub fn init(
-        vcpu_fd: std.os.linux.fd_t,
+        vm: *Vm,
         vcpu_mmap_size: usize,
         cpuid: *c.kvm_cpuid2,
     ) !Vcpu {
+        const vcpu_fd = try vm.create_vcpu();
+        errdefer std.posix.close(vcpu_fd);
+
         _ = try kvm_set_cpuid2(vcpu_fd, cpuid);
 
         const kvm_run_mapping = try std.posix.mmap(
@@ -50,85 +53,91 @@ pub const Vcpu = struct {
         _ = try kvm_set_sregs(self.vcpu_fd, &sregs);
     }
 
-    pub fn run(self: *Vcpu, vm: *Vm) !void {
-        var buffer: [4096]u8 = undefined;
-        var buffer_len: usize = 0;
+    pub fn run(self: *Vcpu) !*c.kvm_run {
+        _ = try kvm_run(self.vcpu_fd);
 
-        const kvm_run_data = self.get_kvm_run();
-
-        while (true) {
-            _ = try kvm_run(self.vcpu_fd);
-
-            switch (kvm_run_data.exit_reason) {
-                c.KVM_EXIT_HLT, c.KVM_EXIT_SHUTDOWN => {
-                    break;
-                },
-                c.KVM_EXIT_IO => {
-                    const io = kvm_run_data.*.unnamed_0.io;
-                    const port = io.port;
-                    const offset = io.data_offset;
-                    const data_ptr: [*]u8 = @ptrFromInt(@intFromPtr(kvm_run_data) + offset);
-
-                    if (port == 0x3f8) {
-                        const byte = data_ptr[0];
-                        switch (byte) {
-                            '\r', '\n' => {
-                                if (buffer_len > 0) {
-                                    std.debug.print("{s}\n", .{buffer[0..buffer_len]});
-                                    buffer_len = 0;
-                                }
-                            },
-                            else => {
-                                if (buffer_len < buffer.len) {
-                                    buffer[buffer_len] = byte;
-                                    buffer_len += 1;
-                                }
-                            },
-                        }
-                    }
-
-                    if (io.direction == 0) {
-                        data_ptr[0] = 0x20;
-                    }
-                },
-                c.KVM_EXIT_MMIO => {
-                    const mmio = &kvm_run_data.*.unnamed_0.mmio;
-                    const phys_addr = mmio.phys_addr;
-                    const is_write = mmio.is_write != 0;
-
-                    // Check if this is accessing our virtio-mmio device
-                    if (phys_addr >= vm.mmio_device.base_addr and
-                        phys_addr < vm.mmio_device.base_addr + layout.VIRTIO_MMIO_DEVICE_SIZE)
-                    {
-                        const offset = phys_addr - layout.VIRTIO_MMIO_BASE;
-
-                        // We assume all MMIO read and writes are word-sized.
-                        std.debug.assert(mmio.len == 4);
-
-                        if (is_write) {
-                            // Handle MMIO write
-                            var value: u32 = 0;
-                            for (0..@min(mmio.len, 4)) |i| {
-                                value |= @as(u32, mmio.data[i]) << @intCast(i * 8);
-                            }
-                            vm.mmio_device.write(offset, value);
-                        } else {
-                            // Handle MMIO read
-                            const value = vm.mmio_device.read(offset);
-                            // Write the value back to the guest
-                            std.mem.writeInt(u32, mmio.data[0..4], value, .little);
-                        }
-                    }
-                },
-                else => {
-                    std.debug.print("Unhandled KVM exit reason: {}\n", .{kvm_run_data.exit_reason});
-                    return error.UnhandledKvmExit;
-                },
-            }
-        }
-    }
-
-    fn get_kvm_run(self: *Vcpu) *c.kvm_run {
         return @ptrCast(self.kvm_run_mapping.ptr);
     }
+
+    // pub fn run(self: *Vcpu, vm: *Vm) !void {
+    //     var buffer: [4096]u8 = undefined;
+    //     var buffer_len: usize = 0;
+
+    //     const kvm_run_data = self.get_kvm_run();
+
+    //     while (true) {
+    //         _ = try kvm_run(self.vcpu_fd);
+
+    //         switch (kvm_run_data.exit_reason) {
+    //             c.KVM_EXIT_HLT, c.KVM_EXIT_SHUTDOWN => {
+    //                 break;
+    //             },
+    //             c.KVM_EXIT_IO => {
+    //                 const io = kvm_run_data.*.unnamed_0.io;
+    //                 const port = io.port;
+    //                 const offset = io.data_offset;
+    //                 const data_ptr: [*]u8 = @ptrFromInt(@intFromPtr(kvm_run_data) + offset);
+
+    //                 if (port == 0x3f8) {
+    //                     const byte = data_ptr[0];
+    //                     switch (byte) {
+    //                         '\r', '\n' => {
+    //                             if (buffer_len > 0) {
+    //                                 std.debug.print("{s}\n", .{buffer[0..buffer_len]});
+    //                                 buffer_len = 0;
+    //                             }
+    //                         },
+    //                         else => {
+    //                             if (buffer_len < buffer.len) {
+    //                                 buffer[buffer_len] = byte;
+    //                                 buffer_len += 1;
+    //                             }
+    //                         },
+    //                     }
+    //                 }
+
+    //                 if (io.direction == 0) {
+    //                     data_ptr[0] = 0x20;
+    //                 }
+    //             },
+    //             c.KVM_EXIT_MMIO => {
+    //                 const mmio = &kvm_run_data.*.unnamed_0.mmio;
+    //                 const phys_addr = mmio.phys_addr;
+    //                 const is_write = mmio.is_write != 0;
+
+    //                 // Check if this is accessing our virtio-mmio device
+    //                 if (phys_addr >= vm.mmio_device.base_addr and
+    //                     phys_addr < vm.mmio_device.base_addr + layout.VIRTIO_MMIO_DEVICE_SIZE)
+    //                 {
+    //                     const offset = phys_addr - layout.VIRTIO_MMIO_BASE;
+
+    //                     // We assume all MMIO read and writes are word-sized.
+    //                     std.debug.assert(mmio.len == 4);
+
+    //                     if (is_write) {
+    //                         // Handle MMIO write
+    //                         var value: u32 = 0;
+    //                         for (0..@min(mmio.len, 4)) |i| {
+    //                             value |= @as(u32, mmio.data[i]) << @intCast(i * 8);
+    //                         }
+    //                         vm.mmio_device.write(offset, value);
+    //                     } else {
+    //                         // Handle MMIO read
+    //                         const value = vm.mmio_device.read(offset);
+    //                         // Write the value back to the guest
+    //                         std.mem.writeInt(u32, mmio.data[0..4], value, .little);
+    //                     }
+    //                 }
+    //             },
+    //             else => {
+    //                 std.debug.print("Unhandled KVM exit reason: {}\n", .{kvm_run_data.exit_reason});
+    //                 return error.UnhandledKvmExit;
+    //             },
+    //         }
+    //     }
+    // }
+
+    // fn get_kvm_run(self: *Vcpu) *c.kvm_run {
+    //     return @ptrCast(self.kvm_run_mapping.ptr);
+    // }
 };

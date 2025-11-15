@@ -1,13 +1,16 @@
 const std = @import("std");
 const linux = std.os.linux;
 
+const GuestMemory = @import("../GuestMemory.zig");
+const EventFd = @import("../EventFd.zig");
+
 const USED_SIZE: u32 = 2 * @sizeOf(u32);
 const AVAILABLE_SIZE: u32 = @sizeOf(u16);
 
 pub const Queue = struct {
     const Self = @This();
 
-    eventfd: std.posix.fd_t,
+    eventfd: EventFd,
 
     // Max size offered by the device
     max_size: u16,
@@ -30,7 +33,8 @@ pub const Queue = struct {
     next_used: u16 = 0,
 
     pub fn init(max_size: u16) !Self {
-        const eventfd = try std.posix.eventfd(0, linux.EFD.CLOEXEC | linux.EFD.NONBLOCK);
+        const eventfd = try EventFd.init();
+        errdefer eventfd.close();
 
         return .{
             .eventfd = eventfd,
@@ -40,17 +44,9 @@ pub const Queue = struct {
         };
     }
 
-    pub fn registerEpoll(self: *Self, epoll_fd: linux.fd_t, user_data: u64) !void {
-        var event = linux.epoll_event{
-            .events = linux.EPOLL.IN,
-            .data = .{ .u64 = user_data },
-        };
-        try std.posix.epoll_ctl(epoll_fd, linux.EPOLL.CTL_ADD, self.eventfd, &event);
-    }
-
     pub fn activate(
         self: *Self,
-        guest_memory: []align(4096) u8,
+        guest_memory: GuestMemory,
     ) !void {
         if (!self.ready) {
             return error.QueueNotReady;
@@ -61,9 +57,20 @@ pub const Queue = struct {
             return error.InvalidQueueSize;
         }
 
-        self.desc_table_ptr = @ptrCast(@alignCast(guest_memory[self.desc_table_address..][0..self.descTableSize()]));
-        self.avail_ring_ptr = @ptrCast(@alignCast(guest_memory[self.avail_ring_address..][0..self.availRingSize()]));
-        self.used_ring_ptr = @ptrCast(@alignCast(guest_memory[self.used_ring_address..][0..self.usedRingSize()]));
+        self.desc_table_ptr = @ptrCast(@alignCast(guest_memory.slice(
+            self.desc_table_address,
+            self.descTableSize(),
+        )));
+        self.avail_ring_ptr = @ptrCast(@alignCast(guest_memory.slice(
+            self.avail_ring_address,
+            self.availRingSize(),
+        )));
+        self.used_ring_ptr = @ptrCast(@alignCast(guest_memory.slice(
+            self.used_ring_address,
+            self.usedRingSize(),
+        )));
+
+        std.log.info("Queue eventfd={}", .{self.eventfd.fd});
     }
 
     fn descTableSize(self: *const Self) u32 {
@@ -229,7 +236,7 @@ pub const Writer = struct {
 
     pub fn write(
         self: *Writer,
-        guest_memory: []align(4096) u8,
+        guest_memory: GuestMemory,
         bytes: []const u8,
     ) void {
         var bytes_index: usize = 0;
@@ -251,8 +258,8 @@ pub const Writer = struct {
                 continue;
             }
 
-            @memcpy(
-                guest_memory[current_desc.addr + index ..][0..bytes_left],
+            guest_memory.writeAt(
+                current_desc.addr + index,
                 bytes[bytes_index..][0..bytes_left],
             );
             bytes_index += bytes_left;

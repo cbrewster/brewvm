@@ -47,16 +47,11 @@ pub const Kvm = struct {
         };
     }
 
-    pub fn create_vm(self: *const Kvm) !Vm {
+    pub fn create_vm(self: *const Kvm) !linux.fd_t {
         const vm_fd: std.posix.fd_t = @intCast(try kvm_create_vm(self.kvm_fd));
         errdefer std.posix.close(vm_fd);
 
-        return try Vm.init(
-            self.gpa,
-            vm_fd,
-            self.vcpu_mmap_size,
-            self.supported_cpuid,
-        );
+        return vm_fd;
     }
 
     pub fn deinit(self: *const Kvm) void {

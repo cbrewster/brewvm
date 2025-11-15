@@ -1,11 +1,18 @@
 const std = @import("std");
 const linux = std.os.linux;
+const ArrayList = std.ArrayList;
+
 const Queue = @import("../queue.zig").Queue;
 const Interrupt = @import("../transport/mmio.zig").Interrupt;
-const ArrayList = std.ArrayList;
+const EventController = @import("../../EventController.zig");
+const GuestMemory = @import("../../GuestMemory.zig");
 
 const RECEIVE_Q0: u32 = 0;
 const TRANSMIT_Q0: u32 = 1;
+
+const RECEIVE_Q0_EVT: u32 = 0;
+const TRANSMIT_Q0_EVT: u32 = 1;
+const STDIN_EVT: u32 = 2;
 
 const Features = struct {
     /// Configuration cols and rows are valid.
@@ -31,7 +38,9 @@ const Config = extern struct {
 
 pub const Console = struct {
     gpa: std.mem.Allocator,
+    guest_memory: GuestMemory,
     queues: [2]Queue,
+    interrupt: Interrupt,
     active: bool = false,
 
     stdout: std.fs.File,
@@ -41,6 +50,7 @@ pub const Console = struct {
 
     pub fn init(
         gpa: std.mem.Allocator,
+        guest_memory: GuestMemory,
         stdout: std.fs.File,
         stdin: std.fs.File,
     ) !Console {
@@ -48,23 +58,26 @@ pub const Console = struct {
         @as(*std.posix.O, @ptrCast(&flags)).NONBLOCK = true;
         _ = try std.posix.fcntl(stdin.handle, std.posix.F.SETFL, flags);
 
-        var console = Console{
+        var interrupt = try Interrupt.init();
+        errdefer interrupt.deinit();
+
+        return .{
             .gpa = gpa,
-            .queues = undefined,
+            .guest_memory = guest_memory,
+            .queues = .{
+                try Queue.init(256),
+                try Queue.init(256),
+            },
             .stdout = stdout,
             .stdin = stdin,
             .buffer = try ArrayList(u8).initCapacity(gpa, 4096),
+            .interrupt = interrupt,
         };
-        for (&console.queues) |*queue| {
-            queue.* = try Queue.init(256);
-        }
-        return console;
     }
 
     pub fn deinit(self: *Console) void {
-        self.stdout.close();
-        self.stdin.close();
         self.buffer.deinit(self.gpa);
+        self.interrupt.deinit();
     }
 
     pub fn getQueue(self: *Console, queue: u32) *Queue {
@@ -84,23 +97,21 @@ pub const Console = struct {
         return self.active;
     }
 
-    pub fn activate(self: *Console, guest_memory: []align(4096) u8) !void {
+    pub fn activate(self: *Console, guest_memory: GuestMemory) !void {
         for (&self.queues) |*queue| {
             try queue.activate(guest_memory);
         }
     }
 
-    fn handleReceiveQueue(
-        self: *Console,
-        guest_memory: []align(4096) u8,
-    ) !bool {
+    fn handleReceiveQueue(self: *Console) !bool {
+        try self.queues[RECEIVE_Q0].eventfd.read();
         var used_desc = false;
         const queue = &self.queues[RECEIVE_Q0];
         while (self.buffer.items.len > 0) {
             const desc = queue.pop() orelse break;
 
             var writer = desc.writer();
-            writer.write(guest_memory, self.buffer.items);
+            writer.write(self.guest_memory, self.buffer.items);
             queue.addUsed(desc.idx, writer.bytes_written);
             used_desc = true;
 
@@ -115,14 +126,15 @@ pub const Console = struct {
 
     fn handleTransmitQueue(
         self: *Console,
-        guest_memory: []align(4096) u8,
     ) !bool {
+        try self.queues[TRANSMIT_Q0].eventfd.read();
+
         var used_desc = false;
         var queue = &self.queues[TRANSMIT_Q0];
 
         var desc = queue.pop();
         while (desc) |d| {
-            const buf = guest_memory[d.addr..][0..d.len];
+            const buf = self.guest_memory.slice(d.addr, d.len);
             self.stdout.writeAll(buf) catch |err|
                 std.log.err("Failed to write to stdout: {}", .{err});
             queue.addUsed(d.idx, 0);
@@ -142,49 +154,75 @@ pub const Console = struct {
         return used_desc;
     }
 
-    fn handleStdin(self: *Console, guest_memory: []align(4096) u8) !bool {
+    fn handleStdin(self: *Console) !bool {
         var buffer: [1024]u8 = undefined;
         const count = try self.stdin.read(&buffer);
         try self.buffer.appendSlice(self.gpa, buffer[0..count]);
 
-        return self.handleReceiveQueue(guest_memory);
+        return self.handleReceiveQueue();
     }
 
     pub fn processEvent(
         self: *Console,
-        event_id: u64,
-        guest_memory: []align(4096) u8,
-        interrupt: *Interrupt,
-    ) !void {
+        events: u32,
+        userdata: u32,
+    ) void {
         var desc_used = false;
 
-        switch (event_id) {
-            RECEIVE_Q0 => {
-                desc_used = try self.handleReceiveQueue(guest_memory);
+        if (events != linux.EPOLL.IN) return;
+
+        switch (userdata) {
+            RECEIVE_Q0_EVT => {
+                desc_used = self.handleReceiveQueue() catch |err| {
+                    std.log.err("Failed to handle receive queue: {}", .{err});
+                    std.debug.panic("receiv q error", .{});
+                    return;
+                };
             },
-            TRANSMIT_Q0 => {
-                desc_used = try self.handleTransmitQueue(guest_memory);
+            TRANSMIT_Q0_EVT => {
+                desc_used = self.handleTransmitQueue() catch |err| {
+                    std.log.err("Failed to handle transmit queue: {}", .{err});
+                    std.debug.panic("tx q error", .{});
+                    return;
+                };
             },
-            3 => {
-                desc_used = try self.handleStdin(guest_memory);
+            STDIN_EVT => {
+                desc_used = self.handleStdin() catch |err| {
+                    std.log.err("Failed to handle stdin: {}", .{err});
+                    std.debug.panic("stdin q error", .{});
+                    return;
+                };
             },
             else => unreachable,
         }
 
         if (desc_used) {
-            interrupt.trigger(Interrupt.VIRTIO_MMIO_INT_VRING) catch |err|
+            self.interrupt.trigger(Interrupt.VIRTIO_MMIO_INT_VRING) catch |err|
                 std.log.err("Failed to trigger interrupt: {}", .{err});
         }
     }
 
-    pub fn registerEpoll(self: *Console, epoll_fd: linux.fd_t) !void {
-        for (&self.queues, 0..) |*queue, i| {
-            try queue.registerEpoll(epoll_fd, i);
-        }
-        var event = linux.epoll_event{
-            .events = linux.EPOLL.IN,
-            .data = .{ .u64 = 3 },
-        };
-        try std.posix.epoll_ctl(epoll_fd, linux.EPOLL.CTL_ADD, self.stdin.handle, &event);
+    pub fn registerEvents(self: *Console, ec: *EventController) !void {
+        try ec.register(
+            self.queues[RECEIVE_Q0].eventfd.fd,
+            linux.EPOLL.IN,
+            self,
+            RECEIVE_Q0_EVT,
+            &Console.processEvent,
+        );
+        try ec.register(
+            self.queues[TRANSMIT_Q0].eventfd.fd,
+            linux.EPOLL.IN,
+            self,
+            TRANSMIT_Q0_EVT,
+            &Console.processEvent,
+        );
+        try ec.register(
+            self.stdin.handle,
+            linux.EPOLL.IN,
+            self,
+            STDIN_EVT,
+            &Console.processEvent,
+        );
     }
 };

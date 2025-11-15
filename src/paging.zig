@@ -3,7 +3,8 @@ const linux = std.os.linux;
 const ioctl = @import("ioctl.zig");
 const c = @import("c.zig").c;
 
-const kvm_set_user_memory_region = ioctl.IoctlW(c.KVM_SET_USER_MEMORY_REGION, *const c.kvm_userspace_memory_region);
+const Vm = @import("vm.zig").Vm;
+const GuestMemory = @import("GuestMemory.zig");
 
 pub const PageTables = struct {
     pub const PML4: usize = 0x1000;
@@ -81,8 +82,8 @@ const DATA_SEGMENT = c.kvm_segment{
     .padding = 0,
 };
 
-pub fn setup_paging(vm_fd: linux.fd_t, guest_memory: []align(4096) u8) !c.kvm_sregs {
-    const memory_u64: []u64 = @alignCast(std.mem.bytesAsSlice(u64, guest_memory));
+pub fn setup_paging(vm: *Vm, guest_memory: GuestMemory) !c.kvm_sregs {
+    const memory_u64: []u64 = @alignCast(std.mem.bytesAsSlice(u64, guest_memory.bytes));
 
     memory_u64[PageTables.PML4 / @sizeOf(u64)] = PageTables.PDPT | PageFlag.Present | PageFlag.ReadWrite;
     memory_u64[PageTables.PDPT / @sizeOf(u64)] = PageTables.PD | PageFlag.Present | PageFlag.ReadWrite;
@@ -101,9 +102,9 @@ pub fn setup_paging(vm_fd: linux.fd_t, guest_memory: []align(4096) u8) !c.kvm_sr
         .flags = 0,
         .guest_phys_addr = 0,
         .memory_size = guest_memory.len,
-        .userspace_addr = @intCast(@intFromPtr(guest_memory.ptr)),
+        .userspace_addr = @intCast(@intFromPtr(guest_memory.bytes.ptr)),
     };
-    _ = try kvm_set_user_memory_region(vm_fd, &mem_region);
+    try vm.set_user_memory_region(&mem_region);
 
     return .{
         .cr3 = @intCast(PageTables.PML4),
