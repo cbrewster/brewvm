@@ -19,13 +19,11 @@ fd: posix.fd_t,
 /// Create a new eventfd.
 pub fn init() !Self {
     const fd = try posix.eventfd(0, linux.EFD.CLOEXEC | linux.EFD.NONBLOCK);
-    std.log.info("Init EventFd fd={}", .{fd});
     return .{ .fd = fd };
 }
 
 /// Closes the eventfd.
 pub fn close(self: *const Self) void {
-    std.log.info("Closing EventFd", .{});
     posix.close(self.fd);
 }
 
@@ -39,7 +37,6 @@ pub fn write(self: *const Self) !void {
 
 /// Reads the eventfd.
 pub fn read(self: *const Self) !void {
-    std.log.info("Reading EventFd fd={}", .{self.fd});
     var buf: [8]u8 = undefined;
     _ = posix.read(self.fd, &buf) catch |e| switch (e) {
         error.WouldBlock => {},

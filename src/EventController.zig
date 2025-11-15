@@ -55,7 +55,6 @@ pub fn register(
     userdata: u32,
     callback: *const fn (@TypeOf(context), userdata: u32, events: u32) void,
 ) !void {
-    std.log.debug("Registering fd={} events={} userdata={}", .{ fd, events, userdata });
     try self.handlers.put(fd, .{ .context = context, .callback = @ptrCast(callback) });
     const data = (@as(u64, @intCast(fd)) << 32) | userdata;
     var event = linux.epoll_event{ .events = events, .data = .{ .u64 = data } };
@@ -73,7 +72,6 @@ pub fn run(self: *Self) !void {
         for (events[0..n]) |event| {
             const fd: posix.fd_t = @intCast(event.data.u64 >> 32);
             const userdata: u32 = @intCast(event.data.u64 & 0xFFFFFFFF);
-            std.log.info("Got event for fd={} (exit {})", .{ fd, self.exit_evt.fd });
             if (fd == self.exit_evt.fd) {
                 std.log.info("Exiting EventController", .{});
                 return;

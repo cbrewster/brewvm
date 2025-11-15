@@ -11,7 +11,7 @@ pub fn startVm(gpa: std.mem.Allocator) !void {
     try vmm.addVirtioConsole();
 
     try vmm.loadKernel(
-        "console=hvc0 earlyprintk=serial loglevel=8 rdinit=/init",
+        "console=hvc0 earlyprintk=serial loglevel=8 rdinit=/init panic=-1",
         "result/bzImage",
         "initramfs",
     );
@@ -19,7 +19,8 @@ pub fn startVm(gpa: std.mem.Allocator) !void {
     var sigmask = std.posix.sigemptyset();
     std.posix.sigaddset(&sigmask, std.posix.SIG.INT);
     std.posix.sigaddset(&sigmask, std.posix.SIG.TERM);
-    std.posix.sigprocmask(linux.SIG.BLOCK, &sigmask, null);
+
+    std.posix.sigprocmask(std.posix.SIG.BLOCK, &sigmask, null);
 
     const signalfd = try std.posix.signalfd(-1, &sigmask, linux.SFD.CLOEXEC | linux.SFD.NONBLOCK);
     defer std.posix.close(signalfd);
@@ -52,5 +53,5 @@ pub fn startVm(gpa: std.mem.Allocator) !void {
 
 const SignalContext = struct {
     vmm: *Vmm,
-    signalfd: std.os.linux.fd_t,
+    signalfd: linux.fd_t,
 };

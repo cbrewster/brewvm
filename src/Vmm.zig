@@ -32,6 +32,7 @@ vcpu: Vcpu,
 guest_memory: GuestMemory,
 event_controller: EventController,
 mmio_devices: ArrayList(*mmio.MmioTransport),
+original_termios: ?std.posix.termios,
 
 pub fn init(gpa: std.mem.Allocator) !Self {
     const kvm = try Kvm.init(gpa);
@@ -48,7 +49,7 @@ pub fn init(gpa: std.mem.Allocator) !Self {
     var guest_memory = try GuestMemory.init(MAPPING_SIZE);
     errdefer guest_memory.deinit();
 
-    var vcpu = try Vcpu.init(&vm, kvm.vcpu_mmap_size, kvm.supported_cpuid);
+    var vcpu = try Vcpu.init(0, &vm, kvm.vcpu_mmap_size, kvm.supported_cpuid);
     errdefer vcpu.deinit();
 
     const sreg = try paging.setup_paging(&vm, guest_memory);
@@ -70,7 +71,35 @@ pub fn init(gpa: std.mem.Allocator) !Self {
         .guest_memory = guest_memory,
         .event_controller = event_controller,
         .mmio_devices = ArrayList(*mmio.MmioTransport).empty,
+        .original_termios = null,
     };
+}
+
+pub fn deinit(self: *Self) void {
+    for (self.mmio_devices.items) |mmio_device| {
+        mmio_device.deinit();
+        self.gpa.destroy(mmio_device);
+    }
+    self.mmio_devices.deinit(self.gpa);
+    self.event_controller.deinit();
+    self.vcpu.deinit();
+    self.vm.deinit();
+    self.kvm.deinit();
+    // Make sure all references to the guest memory are dropped before freeing it.
+    self.guest_memory.deinit();
+
+    if (self.original_termios) |original_termios| {
+        const stdin = std.fs.File.stdin();
+        const stdout = std.fs.File.stdout();
+
+        // \x1b[?25h = Show cursor
+        stdout.writeAll("\x1b[?25h") catch {};
+
+        // Restore original terminal settings
+        std.posix.tcsetattr(stdin.handle, .NOW, original_termios) catch |e| {
+            std.log.err("Failed to restore terminal settings: {}", .{e});
+        };
+    }
 }
 
 pub fn loadKernel(
@@ -86,9 +115,10 @@ pub fn loadKernel(
     index += (try std.fmt.bufPrint(cmdline_buf[index..], "{s}", .{base_cmdline})).len;
 
     for (self.mmio_devices.items) |mmio_device| {
-        index += (try std.fmt.bufPrint(cmdline_buf[index..], " virtio_mmio.device=0x{X}@0x{X}", .{
+        index += (try std.fmt.bufPrint(cmdline_buf[index..], " virtio_mmio.device=0x{X}@0x{X}:{}", .{
             layout.VIRTIO_MMIO_DEVICE_SIZE,
             mmio_device.base_addr,
+            mmio_device.irq,
         })).len;
     }
 
@@ -166,11 +196,43 @@ pub fn addVirtioConsole(self: *Self) !void {
     var mmio_device = try self.gpa.create(mmio.MmioTransport);
     errdefer self.gpa.destroy(mmio_device);
 
+    const stdin = std.fs.File.stdin();
+    const stdout = std.fs.File.stdout();
+
+    var flags = try std.posix.fcntl(stdin.handle, std.posix.F.GETFL, 0);
+    @as(*std.posix.O, @ptrCast(&flags)).NONBLOCK = true;
+    _ = try std.posix.fcntl(stdin.handle, std.posix.F.SETFL, flags);
+
+    // Get current terminal settings
+    const original_termios = try std.posix.tcgetattr(stdin.handle);
+
+    // Hide the host cursor
+    try stdout.writeAll("\x1b[?25l");
+
+    var raw = original_termios;
+    raw.lflag.ECHO = false;
+    raw.lflag.ICANON = false;
+    raw.lflag.IEXTEN = false;
+    raw.iflag.IXON = false;
+    raw.iflag.ICRNL = false;
+    raw.iflag.BRKINT = false;
+    raw.iflag.INPCK = false;
+    raw.iflag.ISTRIP = false;
+    // Keep OPOST enabled so escape sequences work properly
+    // raw.oflag.OPOST = false;
+    // For now it is nice to be able to ctrl-c out of the VM.
+    // raw.lflag.ISIG = false;
+
+    // Set raw mode
+    try std.posix.tcsetattr(stdin.handle, .FLUSH, raw);
+
+    self.original_termios = original_termios;
+
     var console = try Console.init(
         self.gpa,
         self.guest_memory,
-        std.fs.File.stdin(),
-        std.fs.File.stdout(),
+        stdin,
+        stdout,
     );
     errdefer console.deinit();
 
@@ -190,27 +252,13 @@ pub fn addVirtioConsole(self: *Self) !void {
     try self.mmio_devices.append(self.gpa, mmio_device);
 }
 
-pub fn deinit(self: *Self) void {
-    for (self.mmio_devices.items) |mmio_device| {
-        mmio_device.deinit();
-        self.gpa.destroy(mmio_device);
-    }
-    self.mmio_devices.deinit(self.gpa);
-    self.event_controller.deinit();
-    self.vcpu.deinit();
-    self.vm.deinit();
-    self.kvm.deinit();
-    // Make sure all references to the guest memory are dropped before freeing it.
-    self.guest_memory.deinit();
-}
-
 pub fn stop(self: *Self) !void {
     try self.event_controller.stop();
 }
 
 pub fn run(self: *Self) !void {
-    // TODO: Handle graceful shutdown...
     _ = try std.Thread.spawn(.{}, vcpu_thread, .{ self, &self.vcpu });
+    // defer vcpu_handle.join();
 
     try self.event_controller.run();
 }
@@ -224,6 +272,8 @@ pub fn vcpu_thread(self: *Self, vcpu: *Vcpu) !void {
 
         switch (kvm_run_data.exit_reason) {
             c.KVM_EXIT_HLT, c.KVM_EXIT_SHUTDOWN => {
+                std.log.info("Received shutdown signal, stopping VMM", .{});
+                try self.event_controller.stop();
                 break;
             },
             c.KVM_EXIT_IO => {
@@ -264,10 +314,7 @@ pub fn vcpu_thread(self: *Self, vcpu: *Vcpu) !void {
                     if (phys_addr >= mmio_device.base_addr and
                         phys_addr < mmio_device.base_addr + layout.VIRTIO_MMIO_DEVICE_SIZE)
                     {
-                        const offset = phys_addr - layout.VIRTIO_MMIO_BASE;
-
-                        // We assume all MMIO read and writes are word-sized.
-                        std.debug.assert(mmio_data.len == 4);
+                        const offset = phys_addr - mmio_device.base_addr;
 
                         if (is_write) {
                             // Handle MMIO write
@@ -275,12 +322,9 @@ pub fn vcpu_thread(self: *Self, vcpu: *Vcpu) !void {
                             for (0..@min(mmio_data.len, 4)) |i| {
                                 value |= @as(u32, mmio_data.data[i]) << @intCast(i * 8);
                             }
-                            mmio_device.write(offset, value);
+                            try mmio_device.write(offset, mmio_data.data[0..mmio_data.len]);
                         } else {
-                            // Handle MMIO read
-                            const value = mmio_device.read(offset);
-                            // Write the value back to the guest
-                            std.mem.writeInt(u32, mmio_data.data[0..4], value, .little);
+                            try mmio_device.read(offset, mmio_data.data[0..mmio_data.len]);
                         }
                     }
                 }

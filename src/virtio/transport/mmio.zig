@@ -255,7 +255,19 @@ pub const MmioTransport = struct {
 
     /// Handle MMIO read from the guest
     /// Returns the value to return to the guest
-    pub fn read(self: *MmioTransport, offset: u64) u32 {
+    pub fn read(self: *MmioTransport, offset: u64, data: []u8) !void {
+        if (offset >= Registers.CONFIG) {
+            try self.device.readConfig(offset - Registers.CONFIG, data);
+            return;
+        }
+
+        // All registers are 4 bytes.
+        std.debug.assert(data.len == 4);
+        const value = self.readResgiter(offset);
+        std.mem.writeInt(u32, @ptrCast(data), value, .little);
+    }
+
+    fn readResgiter(self: *MmioTransport, offset: u64) u32 {
         switch (offset) {
             Registers.MAGIC_VALUE => {
                 std.log.debug("    <- MAGIC_VALUE = 0x74726976\n", .{});
@@ -304,14 +316,25 @@ pub const MmioTransport = struct {
                 return 0;
             },
             else => {
-                std.log.debug("UNHANDLED offset 0x{X:0>3} = 0\n", .{offset});
+                std.log.err("UNHANDLED offset 0x{X:0>3} = 0\n", .{offset});
                 return 0;
             },
         }
     }
 
     /// Handle MMIO write from the guest
-    pub fn write(self: *MmioTransport, offset: u64, value: u32) void {
+    pub fn write(self: *MmioTransport, offset: u64, value: []const u8) !void {
+        if (offset >= Registers.CONFIG) {
+            try self.device.writeConfig(offset - Registers.CONFIG, value);
+            return;
+        }
+
+        // All registers are 4 bytes.
+        std.debug.assert(value.len == 4);
+        self.writeRegister(offset, std.mem.readInt(u32, @ptrCast(value), .little));
+    }
+
+    fn writeRegister(self: *MmioTransport, offset: u64, value: u32) void {
         switch (offset) {
             Registers.DEVICE_FEATURES_SEL => {
                 std.log.debug("    -> DEVICE_FEATURES_SEL\n", .{});
@@ -373,7 +396,7 @@ pub const MmioTransport = struct {
                 self.device.getQueue(self.queue_sel).setField("used_ring_address", value, .high);
             },
             else => {
-                std.log.debug("    -> UNHANDLED\n", .{});
+                std.log.err("    -> UNHANDLED\n", .{});
             },
         }
     }

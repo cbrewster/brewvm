@@ -1,0 +1,674 @@
+info: Blocking signals SIGINT and SIGTERM
+info: Signal mask verified. SIGINT blocked: true
+early console in extract_kernel
+input_data: 0x0000000001ace2c4
+input_len: 0x0000000000331b4d
+output: 0x0000000001000000
+output_len: 0x0000000000dd1090
+kernel_total_size: 0x0000000000c30000
+needed_size: 0x0000000000e00000
+trampoline_32bit: 0x0000000000000000
+Physical KASLR using RDRAND RDTSC...
+Virtual KASLR using RDRAND RDTSC...
+Decompressing Linux... Parsing ELF... Performing relocations... done.
+Booting the kernel (entry_offset: 0x00000000005c7910).
+[    0.000000] Linux version 6.17.1 (nixbld@localhost) (gcc (GCC) 14.3.0, GNU ld (GNU Binutils) 2.44) #1-NixOS PREEMPT_DYNAMIC Mon Oct  6 09:20:06 UTC 2025
+[    0.000000] Command line: console=hvc0 earlyprintk=serial loglevel=8 rdinit=/init panic=-1 virtio_mmio.device=0x200@0xFFF00000:5
+[    0.000000] [Firmware Bug]: TSC doesn't count with P0 frequency!
+[    0.000000] BIOS-provided physical RAM map:
+[    0.000000] BIOS-e820: [mem 0x0000000000000000-0x000000000009fbff] usable
+[    0.000000] BIOS-e820: [mem 0x000000000009fc00-0x00000000000dffff] reserved
+[    0.000000] BIOS-e820: [mem 0x0000000000100000-0x000000003fffffff] usable
+[    0.000000] printk: legacy bootconsole [earlyser0] enabled
+[    0.000000] NX (Execute Disable) protection: active
+[    0.000000] APIC: Static calls initialized
+[    0.000000] DMI not present or invalid.
+[    0.000000] tsc: Fast TSC calibration using PIT
+[    0.000000] tsc: Detected 3992.394 MHz processor
+[    0.000050] e820: update [mem 0x00000000-0x00000fff] usable ==> reserved
+[    0.000666] e820: remove [mem 0x000a0000-0x000fffff] usable
+[    0.001179] last_pfn = 0x40000 max_arch_pfn = 0x400000000
+[    0.001711] MTRRs disabled by BIOS
+[    0.002031] x86/PAT: Configuration [0-7]: WB  WC  UC- UC  WB  WP  UC- WT  
+Memory KASLR using RDRAND RDTSC...
+[    0.005226] Using GB pages for direct mapping
+[    0.005669] RAMDISK: [mem 0x0f000000-0x0fef0fff]
+[    0.006117] ACPI: Early table checksum verification disabled
+[    0.006660] ACPI BIOS Error (bug): A valid RSDP was not found (20250404/tbxfroot-222)
+[    0.007376] ACPI: Failed to initialize tables, status=0x5 (AE_NOT_FOUND)
+[    0.007421] Zone ranges:
+[    0.008328]   DMA      [mem 0x0000000000001000-0x0000000000ffffff]
+[    0.008910]   DMA32    [mem 0x0000000001000000-0x000000003fffffff]
+[    0.009484]   Normal   empty
+[    0.009751] Movable zone start for each node
+[    0.010142] Early memory node ranges
+[    0.010480]   node   0: [mem 0x0000000000001000-0x000000000009efff]
+[    0.011049]   node   0: [mem 0x0000000000100000-0x000000003fffffff]
+[    0.011626] Initmem setup node 0 [mem 0x0000000000001000-0x000000003fffffff]
+[    0.012297] On node 0, zone DMA: 1 pages in unavailable ranges
+[    0.013058] On node 0, zone DMA: 97 pages in unavailable ranges
+[    0.027082] No local APIC present
+[    0.027401] APIC: disable apic facility
+[    0.027802] APIC: Switched APIC routing to: noop
+[    0.028229] CPU topo: Max. logical packages:   1
+[    0.028656] CPU topo: Max. logical dies:       1
+[    0.029075] CPU topo: Max. dies per package:   1
+[    0.029506] CPU topo: Max. threads per core:   1
+[    0.029927] CPU topo: Num. cores per package:     1
+[    0.030366] CPU topo: Num. threads per package:   1
+[    0.030833] CPU topo: Allowing 1 present CPUs plus 0 hotplug CPUs
+[    0.031388] [mem 0x40000000-0xffffffff] available for PCI devices
+[    0.031952] clocksource: refined-jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 7645519600211568 ns
+[    0.033890] pcpu-alloc: s0 r0 d32768 u32768 alloc=1*32768
+[    0.034373] pcpu-alloc: [0] 0 
+[    0.034682] Kernel command line: console=hvc0 earlyprintk=serial loglevel=8 rdinit=/init panic=-1 virtio_mmio.device=0x200@0xFFF00000:5
+[    0.036110] random: crng init done
+[    0.036420] printk: log buffer data + meta data: 131072 + 458752 = 589824 bytes
+[    0.037901] Dentry cache hash table entries: 131072 (order: 8, 1048576 bytes, linear)
+[    0.039023] Inode-cache hash table entries: 65536 (order: 7, 524288 bytes, linear)
+[    0.039728] Built 1 zonelists, mobility grouping on.  Total pages: 262046
+[    0.040363] mem auto-init: stack:all(zero), heap alloc:off, heap free:off
+[    0.042104] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=1, Nodes=1
+Poking KASLR using RDRAND RDTSC...
+[    0.043896] Dynamic Preempt: none
+[    0.044234] rcu: Preemptible hierarchical RCU implementation.
+[    0.044758] rcu: 	RCU event tracing is enabled.
+[    0.045190] 	Trampoline variant of Tasks RCU enabled.
+[    0.045647] 	Tracing variant of Tasks RCU enabled.
+[    0.046068] rcu: RCU calculated value of scheduler-enlistment delay is 25 jiffies.
+[    0.046752] RCU Tasks: Setting shift to 0 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=1.
+[    0.047522] RCU Tasks Trace: Setting shift to 0 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=1.
+[    0.048758] NR_IRQS: 4352, nr_irqs: 24, preallocated irqs: 16
+[    0.049464] rcu: srcu_init: Setting srcu_struct sizes based on contention.
+[    0.050231] APIC disabled by BIOS
+[    0.050554] APIC: Keep in PIC mode(8259)
+[    0.050899] clocksource: tsc-early: mask: 0xffffffffffffffff max_cycles: 0x73189807c7e, max_idle_ns: 881590548655 ns
+[    0.051828] Calibrating delay loop (skipped), value calculated using timer frequency.. 7984.78 BogoMIPS (lpj=15969576)
+[    0.052837] [Firmware Bug]: CPU   0: APIC ID mismatch. CPUID: 0x000e APIC: 0x0000
+[    0.053524] x86/cpu: User Mode Instruction Prevention (UMIP) activated
+[    0.054244] Last level iTLB entries: 4KB 512, 2MB 512, 4MB 256
+[    0.055833] Last level dTLB entries: 4KB 3072, 2MB 3072, 4MB 1536, 1GB 0
+[    0.056423] CPU: AMD 19/74 (family: 0x19, model: 0x74, stepping: 0x1)
+[    0.057001] mitigations: Enabled attack vectors: user_kernel, user_user, SMT mitigations: auto
+[    0.057766] Speculative Store Bypass: Mitigation: Speculative Store Bypass disabled via prctl
+[    0.058521] Transient Scheduler Attacks: Mitigation: Clear CPU buffers: user/kernel boundary
+[    0.059262] Spectre V2 : Mitigation: Enhanced / Automatic IBRS
+[    0.059832] Speculative Return Stack Overflow: Mitigation: Safe RET
+[    0.060383] VMSCAPE: Vulnerable
+[    0.060668] Spectre V1 : Mitigation: usercopy/swapgs barriers and __user pointer sanitization
+[    0.061419] Spectre V2 : mitigation: Enabling conditional Indirect Branch Prediction Barrier
+[    0.062168] active return thunk: srso_alias_return_thunk
+[    0.062663] x86/fpu: Supporting XSAVE feature 0x001: 'x87 floating point registers'
+[    0.063333] x86/fpu: Supporting XSAVE feature 0x002: 'SSE registers'
+[    0.063830] x86/fpu: Supporting XSAVE feature 0x004: 'AVX registers'
+[    0.064382] x86/fpu: Supporting XSAVE feature 0x020: 'AVX-512 opmask'
+[    0.064951] x86/fpu: Supporting XSAVE feature 0x040: 'AVX-512 Hi256'
+[    0.065516] x86/fpu: Supporting XSAVE feature 0x080: 'AVX-512 ZMM_Hi256'
+[    0.066104] x86/fpu: Supporting XSAVE feature 0x200: 'Protection Keys User registers'
+[    0.066797] x86/fpu: xstate_offset[2]:  576, xstate_sizes[2]:  256
+[    0.067340] x86/fpu: xstate_offset[5]:  832, xstate_sizes[5]:   64
+[    0.067830] x86/fpu: xstate_offset[6]:  896, xstate_sizes[6]:  512
+[    0.068373] x86/fpu: xstate_offset[7]: 1408, xstate_sizes[7]: 1024
+[    0.068915] x86/fpu: xstate_offset[9]: 2432, xstate_sizes[9]:    8
+[    0.069466] x86/fpu: Enabled xstate features 0x2e7, context size is 2440 bytes, using 'compacted' format.
+[    0.075431] pid_max: default: 32768 minimum: 301
+[    0.075860] Mount-cache hash table entries: 2048 (order: 2, 16384 bytes, linear)
+[    0.076512] Mountpoint-cache hash table entries: 2048 (order: 2, 16384 bytes, linear)
+[    0.077616] Performance Events: Fam17h+ core perfctr, 
+[    0.077633] no APIC, boot with the "lapic" boot parameter to force-enable it.
+[    0.078728] no hardware sampling interrupt available.
+[    0.079184] AMD PMU driver.
+[    0.079427] ... version:                2
+[    0.079789] ... bit width:              48
+[    0.079831] ... generic registers:      6
+[    0.080179] ... value mask:             0000ffffffffffff
+[    0.080657] ... max period:             00007fffffffffff
+[    0.081121] ... fixed-purpose events:   0
+[    0.081479] ... event mask:             000000000000003f
+[    0.082041] signal: max sigframe size: 2976
+[    0.082481] rcu: Hierarchical SRCU implementation.
+[    0.082895] rcu: 	Max phase no-delay instances is 1000.
+[    0.085026] Memory: 998372K/1048184K available (5919K kernel code, 1122K rwdata, 1380K rodata, 1096K init, 384K bss, 46284K reserved, 0K cma-reserved)
+[    0.086269] devtmpfs: initialized
+[    0.086759] clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 7645041785100000 ns
+[    0.087605] posixtimers hash table entries: 512 (order: 0, 4096 bytes, linear)
+[    0.087846] futex hash table entries: 256 (8192 bytes on 1 NUMA nodes, total 8 KiB, linear).
+[    0.088692] thermal_sys: Registered thermal governor 'step_wise'
+[    0.088700] cpuidle: using governor ladder
+[    0.092062] ACPI: Interpreter disabled.
+[    0.092416] iommu: Default domain type: Translated
+[    0.092834] iommu: DMA domain TLB invalidation policy: lazy mode
+[    0.093408] clocksource: Switched to clocksource tsc-early
+[    0.093959] pnp: PnP ACPI: disabled
+[    0.095267] virtio-mmio: Registering device virtio-mmio.0 at 0xfff00000-0xfff001ff, IRQ 5.
+[    0.096041] platform rtc_cmos: registered platform RTC device (no PNP device found)
+[    0.096938] Unpacking initramfs...
+[    0.102231] workingset: timestamp_bits=62 max_order=18 bucket_order=0
+debug:     <- MAGIC_VALUE = 0x74726976
+
+debug:     <- VERSION = 2
+
+debug:     <- DEVICE_ID = 3
+
+debug:     <- VENDOR_ID = 0x57455242
+
+debug:     -> STATUS = 0b0
+
+debug:     <- STATUS = 0b0
+
+debug:     -> STATUS = 0b1
+
+debug:     <- STATUS = 0b1
+
+debug:     -> STATUS = 0b11
+
+debug:     -> DEVICE_FEATURES_SEL
+
+debug:     <- DEVICE_FEATURES[1] = 0x1
+
+debug:     -> DEVICE_FEATURES_SEL
+
+debug:     <- DEVICE_FEATURES[0] = 0x1
+
+debug:     -> DRIVER_FEATURES_SEL
+
+debug:     -> DRIVER_FEATURES[1] = 0x1
+
+debug:     -> DRIVER_FEATURES_SEL
+
+debug:     -> DRIVER_FEATURES[0] = 0x1
+
+debug:     <- STATUS = 0b11
+
+debug:     -> STATUS = 0b1011
+
+debug:     <- STATUS = 0b1011
+
+debug:     -> QUEUE_SEL = 0
+
+debug:     <- QUEUE_READY = false
+
+debug:     <- QUEUE_NUM_MAX = 256
+
+debug:     -> QUEUE_NUM = 256
+
+debug:     -> QUEUE_DESC_LOW = 0x1158000
+
+debug:     -> QUEUE_DESC_HIGH = 0x0
+
+debug:     -> QUEUE_DRIVER_LOW = 0x1159000
+
+debug:     -> QUEUE_DRIVER_HIGH = 0x0
+
+debug:     -> QUEUE_DEVICE_LOW = 0x115A000
+
+debug:     -> QUEUE_DEVICE_HIGH = 0x0
+
+debug:     -> QUEUE_READY = true
+
+debug:     -> QUEUE_SEL = 1
+
+debug:     <- QUEUE_READY = false
+
+debug:     <- QUEUE_NUM_MAX = 256
+
+debug:     -> QUEUE_NUM = 256
+
+debug:     -> QUEUE_DESC_LOW = 0x115C000
+
+debug:     -> QUEUE_DESC_HIGH = 0x0
+
+debug:     -> QUEUE_DRIVER_LOW = 0x115D000
+
+debug:     -> QUEUE_DRIVER_HIGH = 0x0
+
+debug:     -> QUEUE_DEVICE_LOW = 0x115E000
+
+debug:     -> QUEUE_DEVICE_HIGH = 0x0
+
+debug:     -> QUEUE_READY = true
+
+debug:     <- STATUS = 0b1011
+
+debug:     -> STATUS = 0b1111
+
+info: Queue eventfd=9
+info: Queue eventfd=10
+[    0.116894] printk: legacy console [hvc0] enabled
+[    0.117313] printk: legacy bootconsole [earlyser0] disabled
+debug:     <- STATUS = 0b1111
+
+debug: set used ring idx=1
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=2
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=3
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=4
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=5
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=6
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=7
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=8
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=9
+debug: set used ring idx=10
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=11
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=12
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=13
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=14
+debug:     <- IRQ Trigger
+
+debug:     <- INTERRUPT_STATUS = 0x1
+
+debug:     -> INTERRUPT_ACK
+
+debug:     <- INTERRUPT_STATUS = 0x0
+
+debug:     -> INTERRUPT_ACK
+
+debug: set used ring idx=15
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=16
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=17
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=18
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=19
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=20
+debug:     <- IRQ Trigger
+
+debug:     <- INTERRUPT_STATUS = 0x1
+
+debug:     -> INTERRUPT_ACK
+
+debug:     <- INTERRUPT_STATUS = 0x0
+
+debug:     -> INTERRUPT_ACK
+
+debug: set used ring idx=21
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=22
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=23
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=24
+debug:     <- IRQ Trigger
+
+debug:     <- INTERRUPT_STATUS = 0x1
+
+debug:     -> INTERRUPT_ACK
+
+debug:     <- INTERRUPT_STATUS = 0x0
+
+debug:     -> INTERRUPT_ACK
+
+debug: set used ring idx=25
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=26
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=27
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=28
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=29
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=30
+debug:     <- IRQ Trigger
+
+debug:     <- INTERRUPT_STATUS = 0x1
+
+debug:     -> INTERRUPT_ACK
+
+debug:     <- INTERRUPT_STATUS = 0x0
+
+debug:     -> INTERRUPT_ACK
+
+debug: set used ring idx=31
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=32
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=33
+debug:     <- IRQ Trigger
+
+debug:     <- INTERRUPT_STATUS = 0x1
+
+debug:     -> INTERRUPT_ACK
+
+debug:     <- INTERRUPT_STATUS = 0x0
+
+debug:     -> INTERRUPT_ACK
+
+debug: set used ring idx=34
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=35
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=36
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=37
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=38
+debug:     <- IRQ Trigger
+
+debug:     <- INTERRUPT_STATUS = 0x1
+
+debug:     -> INTERRUPT_ACK
+
+debug:     <- INTERRUPT_STATUS = 0x0
+
+debug:     -> INTERRUPT_ACK
+
+debug: set used ring idx=39
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=40
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=41
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=42
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=43
+debug:     <- IRQ Trigger
+
+debug:     <- INTERRUPT_STATUS = 0x1
+
+debug:     -> INTERRUPT_ACK
+
+debug:     <- INTERRUPT_STATUS = 0x0
+
+debug:     -> INTERRUPT_ACK
+
+debug: set used ring idx=44
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=45
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=46
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=47
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=48
+debug:     <- IRQ Trigger
+
+debug:     <- INTERRUPT_STATUS = 0x1
+
+debug:     -> INTERRUPT_ACK
+
+debug:     <- INTERRUPT_STATUS = 0x0
+
+debug:     -> INTERRUPT_ACK
+
+debug: set used ring idx=49
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=50
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=51
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=52
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=53
+debug:     <- IRQ Trigger
+
+debug:     <- INTERRUPT_STATUS = 0x1
+
+debug:     -> INTERRUPT_ACK
+
+debug:     <- INTERRUPT_STATUS = 0x0
+
+debug:     -> INTERRUPT_ACK
+
+debug: set used ring idx=54
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=55
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=56
+debug:     <- IRQ Trigger
+
+debug:     <- INTERRUPT_STATUS = 0x1
+
+debug:     -> INTERRUPT_ACK
+
+debug:     <- INTERRUPT_STATUS = 0x0
+
+debug:     -> INTERRUPT_ACK
+
+debug: set used ring idx=57
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=58
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=59
+debug:     <- IRQ Trigger
+
+debug:     <- INTERRUPT_STATUS = 0x1
+
+debug:     -> INTERRUPT_ACK
+
+debug:     <- INTERRUPT_STATUS = 0x0
+
+debug:     -> INTERRUPT_ACK
+
+debug: set used ring idx=60
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=61
+debug:     <- IRQ Trigger
+
+debug:     <- INTERRUPT_STATUS = 0x1
+
+debug:     -> INTERRUPT_ACK
+
+debug:     <- INTERRUPT_STATUS = 0x0
+
+debug:     -> INTERRUPT_ACK
+
+debug: set used ring idx=62
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=63
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=64
+debug:     <- IRQ Trigger
+
+debug:     <- INTERRUPT_STATUS = 0x1
+
+debug:     -> INTERRUPT_ACK
+
+debug:     <- INTERRUPT_STATUS = 0x0
+
+debug:     -> INTERRUPT_ACK
+
+debug: set used ring idx=65
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=66
+debug:     <- IRQ Trigger
+
+debug:     <- INTERRUPT_STATUS = 0x1
+
+debug:     -> INTERRUPT_ACK
+
+debug:     <- INTERRUPT_STATUS = 0x0
+
+debug:     -> INTERRUPT_ACK
+
+debug: set used ring idx=67
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=68
+debug:     <- IRQ Trigger
+
+debug:     <- INTERRUPT_STATUS = 0x1
+
+debug:     -> INTERRUPT_ACK
+
+debug:     <- INTERRUPT_STATUS = 0x0
+
+debug:     -> INTERRUPT_ACK
+
+debug: set used ring idx=69
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=70
+debug:     <- IRQ Trigger
+
+debug:     <- INTERRUPT_STATUS = 0x1
+
+debug:     -> INTERRUPT_ACK
+
+debug:     <- INTERRUPT_STATUS = 0x0
+
+debug:     -> INTERRUPT_ACK
+
+debug: set used ring idx=71
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=72
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=73
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=74
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=75
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=76
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=77
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=78
+debug:     <- IRQ Trigger
+
+debug:     <- INTERRUPT_STATUS = 0x1
+
+debug:     -> INTERRUPT_ACK
+
+debug:     <- INTERRUPT_STATUS = 0x0
+
+debug:     -> INTERRUPT_ACK
+
+debug: set used ring idx=79
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=80
+debug:     <- IRQ Trigger
+
+debug:     <- INTERRUPT_STATUS = 0x1
+
+debug:     -> INTERRUPT_ACK
+
+debug:     <- INTERRUPT_STATUS = 0x0
+
+debug:     -> INTERRUPT_ACK
+
+debug: set used ring idx=81
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=82
+debug:     <- IRQ Trigger
+
+debug:     <- INTERRUPT_STATUS = 0x1
+
+debug:     -> INTERRUPT_ACK
+
+debug:     <- INTERRUPT_STATUS = 0x0
+
+debug:     -> INTERRUPT_ACK
+
+debug: set used ring idx=83
+debug:     <- IRQ Trigger
+
+debug:     <- INTERRUPT_STATUS = 0x1
+
+debug:     -> INTERRUPT_ACK
+
+debug: set used ring idx=84
+debug:     <- IRQ Trigger
+
+debug:     <- INTERRUPT_STATUS = 0x1
+
+debug:     -> INTERRUPT_ACK
+
+debug: set used ring idx=85
+debug:     <- IRQ Trigger
+
+debug: set used ring idx=86
+debug:     <- IRQ Trigger
+
+debug:     <- INTERRUPT_STATUS = 0x1
+
+debug:     -> INTERRUPT_ACK
+
+debug:     <- INTERRUPT_STATUS = 0x0
+
+debug:     -> INTERRUPT_ACK
+
+debug: set used ring idx=87
+debug:     <- IRQ Trigger
+
+debug:     <- INTERRUPT_STATUS = 0x1
+
+debug:     -> INTERRUPT_ACK
+
+info: Stopping VMM
+info: Exiting EventController
+info: VMM Exited

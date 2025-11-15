@@ -15,11 +15,12 @@ pub const Vcpu = struct {
     kvm_run_mapping: []align(4096) u8,
 
     pub fn init(
+        vcpu_id: usize,
         vm: *Vm,
         vcpu_mmap_size: usize,
         cpuid: *c.kvm_cpuid2,
     ) !Vcpu {
-        const vcpu_fd = try vm.create_vcpu();
+        const vcpu_fd = try vm.create_vcpu(vcpu_id);
         errdefer std.posix.close(vcpu_fd);
 
         _ = try kvm_set_cpuid2(vcpu_fd, cpuid);

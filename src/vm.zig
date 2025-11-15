@@ -7,7 +7,7 @@ const Kvm = @import("kvm.zig").Kvm;
 const kvm_create_irqchip = ioctl.Ioctl(c.KVM_CREATE_IRQCHIP);
 const kvm_create_pit2 = ioctl.IoctlW(c.KVM_CREATE_PIT2, *const c.kvm_pit_config);
 const kvm_set_identity_map_addr = ioctl.IoctlW(c.KVM_SET_IDENTITY_MAP_ADDR, *const usize);
-const kvm_create_vcpu = ioctl.Ioctl(c.KVM_CREATE_VCPU);
+const kvm_create_vcpu = ioctl.IoctlW(c.KVM_CREATE_VCPU, usize);
 const kvm_set_regs = ioctl.IoctlW(c.KVM_SET_REGS, *const c.kvm_regs);
 const kvm_set_sregs = ioctl.IoctlW(c.KVM_SET_SREGS, *const c.kvm_sregs);
 const kvm_get_supported_cpuid = ioctl.IoctlR(c.KVM_GET_SUPPORTED_CPUID, *c.kvm_cpuid2);
@@ -49,8 +49,8 @@ pub const Vm = struct {
         _ = try kvm_set_tss_addr(self.vm_fd, addr);
     }
 
-    pub fn create_vcpu(self: *const Vm) !linux.fd_t {
-        return @intCast(try kvm_create_vcpu(self.vm_fd));
+    pub fn create_vcpu(self: *const Vm, vcpu_id: usize) !linux.fd_t {
+        return @intCast(try kvm_create_vcpu(self.vm_fd, vcpu_id));
     }
 
     pub fn set_user_memory_region(

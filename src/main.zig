@@ -2,7 +2,7 @@ const std = @import("std");
 const brewvm = @import("brewvm");
 
 pub const std_options = std.Options{
-    .log_level = .debug,
+    .log_level = .info,
 };
 
 pub fn main() !void {
