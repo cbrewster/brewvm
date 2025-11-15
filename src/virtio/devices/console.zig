@@ -108,12 +108,10 @@ pub const Console = struct {
         switch (offset) {
             ConfigOffset.COLS => {
                 if (data.len != @sizeOf(u16)) return error.InvalidLength;
-                std.log.info("reading cols {}", .{self.size.col});
                 std.mem.writeInt(u16, @ptrCast(data), self.size.col, .little);
             },
             ConfigOffset.ROWS => {
                 if (data.len != @sizeOf(u16)) return error.InvalidLength;
-                std.log.info("reading rows {}", .{self.size.row});
                 std.mem.writeInt(u16, @ptrCast(data), self.size.row, .little);
             },
             else => return error.InvalidOffset,

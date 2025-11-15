@@ -69,8 +69,6 @@ pub const Queue = struct {
             self.used_ring_address,
             self.usedRingSize(),
         )));
-
-        std.log.info("Queue eventfd={}", .{self.eventfd.fd});
     }
 
     fn descTableSize(self: *const Self) u32 {

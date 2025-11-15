@@ -11,7 +11,7 @@ pub fn startVm(gpa: std.mem.Allocator) !void {
     try vmm.addVirtioConsole();
 
     try vmm.loadKernel(
-        "console=hvc0 earlyprintk=serial loglevel=8 rdinit=/init panic=-1",
+        "console=hvc0 loglevel=8 rdinit=/init panic=-1",
         "result/bzImage",
         "initramfs",
     );

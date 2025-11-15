@@ -89,14 +89,13 @@ pub fn deinit(self: *Self) void {
     self.guest_memory.deinit();
 
     if (self.original_termios) |original_termios| {
-        const stdin = std.fs.File.stdin();
         const stdout = std.fs.File.stdout();
 
         // \x1b[?25h = Show cursor
         stdout.writeAll("\x1b[?25h") catch {};
 
         // Restore original terminal settings
-        std.posix.tcsetattr(stdin.handle, .NOW, original_termios) catch |e| {
+        std.posix.tcsetattr(stdout.handle, .NOW, original_termios) catch |e| {
             std.log.err("Failed to restore terminal settings: {}", .{e});
         };
     }
@@ -204,27 +203,35 @@ pub fn addVirtioConsole(self: *Self) !void {
     _ = try std.posix.fcntl(stdin.handle, std.posix.F.SETFL, flags);
 
     // Get current terminal settings
-    const original_termios = try std.posix.tcgetattr(stdin.handle);
+    const original_termios = try std.posix.tcgetattr(stdout.handle);
 
     // Hide the host cursor
     try stdout.writeAll("\x1b[?25l");
 
+    // Simulate cfmakeraw
     var raw = original_termios;
-    raw.lflag.ECHO = false;
-    raw.lflag.ICANON = false;
-    raw.lflag.IEXTEN = false;
-    raw.iflag.IXON = false;
-    raw.iflag.ICRNL = false;
+    raw.iflag.IGNBRK = false;
     raw.iflag.BRKINT = false;
-    raw.iflag.INPCK = false;
+    raw.iflag.PARMRK = false;
     raw.iflag.ISTRIP = false;
-    // Keep OPOST enabled so escape sequences work properly
-    // raw.oflag.OPOST = false;
-    // For now it is nice to be able to ctrl-c out of the VM.
-    // raw.lflag.ISIG = false;
+    raw.iflag.INLCR = false;
+    raw.iflag.IGNCR = false;
+    raw.iflag.ICRNL = false;
+    raw.iflag.IXON = false;
+
+    raw.oflag.OPOST = false;
+
+    raw.lflag.ECHO = false;
+    raw.lflag.ECHONL = false;
+    raw.lflag.ICANON = false;
+    raw.lflag.ISIG = false;
+    raw.lflag.IEXTEN = false;
+
+    raw.cflag.CSIZE = .CS8;
+    raw.cflag.PARENB = false;
 
     // Set raw mode
-    try std.posix.tcsetattr(stdin.handle, .FLUSH, raw);
+    try std.posix.tcsetattr(stdout.handle, .FLUSH, raw);
 
     self.original_termios = original_termios;
 
