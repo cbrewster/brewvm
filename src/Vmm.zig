@@ -123,15 +123,23 @@ pub fn loadKernel(
     defer vmlinux_file.close();
     const vmlinux_stat = try vmlinux_file.stat();
 
-    const initram_file = try std.fs.cwd().openFile(initramfs_path, .{ .mode = .read_only });
-    defer initram_file.close();
-    const initram_stat = try initram_file.stat();
+    var initram_file: ?std.fs.File = null;
+    var initramfs_addr: ?u32 = null;
+    var initramfs_size: ?u32 = null;
+    if (initramfs_path.len > 0) {
+        initram_file = try std.fs.cwd().openFile(initramfs_path, .{ .mode = .read_only });
+        const initram_stat = try initram_file.?.stat();
+
+        initramfs_addr = ADDR_INITRAMFS;
+        initramfs_size = std.math.cast(u32, initram_stat.size) orelse return error.InitramfsTooLarge;
+    }
+    defer if (initram_file) |f| f.close();
 
     const boot_params = try getBootParams(
         &vmlinux_file,
         ADDR_CMDLINE,
-        ADDR_INITRAMFS,
-        std.math.cast(u32, initram_stat.size) orelse return error.InitramfsTooLarge,
+        initramfs_addr,
+        initramfs_size,
         &.{
             .{
                 .addr = 0,
@@ -170,13 +178,15 @@ pub fn loadKernel(
         return error.FailedToLoadKernel;
     }
 
-    // Load the initramfs into memory.
-    bytes_copied = try initram_file.readAll(self.guest_memory.slice(
-        ADDR_INITRAMFS,
-        @intCast(initram_stat.size),
-    ));
-    if (bytes_copied != initram_stat.size) {
-        return error.FailedToLoadKernel;
+    if (initram_file) |f| {
+        // Load the initramfs into memory.
+        bytes_copied = try f.readAll(self.guest_memory.slice(
+            ADDR_INITRAMFS,
+            @intCast(initramfs_size.?),
+        ));
+        if (bytes_copied != initramfs_size.?) {
+            return error.FailedToLoadKernel;
+        }
     }
 
     // Copy in cmdline

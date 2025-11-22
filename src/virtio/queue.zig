@@ -134,6 +134,10 @@ pub const Queue = struct {
         return DescriptorChain.init(self.desc_table_ptr, self.availRingGetDescIdx(idx));
     }
 
+    pub fn getDesc(self: *Self, idx: u16) ?DescriptorChain {
+        return DescriptorChain.init(self.desc_table_ptr, idx);
+    }
+
     pub fn setField(
         self: *Self,
         comptime field_name: []const u8,
@@ -219,6 +223,7 @@ pub const DescriptorChain = struct {
 pub const Reader = struct {
     chain: DescriptorChain,
     bytes_read: u32,
+    size: u32,
 
     current_desc_idx: ?u16,
     current_desc_bytes_read: usize,
@@ -229,7 +234,18 @@ pub const Reader = struct {
             current_desc_idx = null;
         }
 
+        // Calculate the size of the readable portion of the descriptor chain.
+        var size: u32 = 0;
+        var curr = current_desc_idx;
+        while (curr) |desc_idx| {
+            const d = chain.desc_table[desc_idx];
+            if (d.flags.virtq_desc_f_write) break;
+            size += d.len;
+            curr = if (d.flags.virtq_desc_f_next) d.next else null;
+        }
+
         return .{
+            .size = size,
             .chain = chain,
             .bytes_read = 0,
             .current_desc_idx = current_desc_idx,
@@ -237,45 +253,81 @@ pub const Reader = struct {
         };
     }
 
-    pub fn getIovecs(
+    /// Populates the provided iovecs with the readable portion of the
+    /// descriptor chain for the provided offset and length.
+    pub fn slice(
         self: *Reader,
         guest_memory: GuestMemory,
         iovecs: []posix.iovec_const,
+        offset: usize,
+        len: usize,
     ) !usize {
+        if (len == 0) return 0;
+
+        if (len > self.size) {
+            return error.InvalidLength;
+        }
+        if (len + offset > self.size) {
+            return error.InvalidOffset;
+        }
+
         var current_desc_idx: ?u16 = self.current_desc_idx;
-        var i: usize = 0;
+        var iovec_idx: usize = 0;
+        var skipped: usize = 0;
+        var remaining: usize = len;
         while (current_desc_idx) |desc_idx| {
             const current_desc = &self.chain.desc_table[desc_idx];
             if (current_desc.flags.virtq_desc_f_write) {
                 break;
             }
 
-            if (i >= iovecs.len) {
-                std.log.err("Not enough iovecs {} >= {}", .{ i, iovecs.len });
+            var desc_offset: usize = 0;
+            if (skipped < offset) {
+                if (skipped + current_desc.len <= offset) {
+                    skipped += current_desc.len;
+                    current_desc_idx = if (current_desc.flags.virtq_desc_f_next) current_desc.next else null;
+                    continue;
+                }
+
+                desc_offset = offset - skipped;
+                skipped = offset;
+            }
+
+            if (iovec_idx >= iovecs.len) {
+                std.log.err("Not enough iovecs {} >= {}", .{ iovec_idx, iovecs.len });
                 return error.NotEnoughIovecs;
             }
 
-            iovecs[i] = .{
-                .base = @ptrCast(guest_memory.slice(current_desc.addr, current_desc.len)),
-                .len = current_desc.len,
-            };
-            i += 1;
-
-            if (current_desc.flags.virtq_desc_f_next) {
-                current_desc_idx = current_desc.next;
-            } else {
-                current_desc_idx = null;
+            var desc_len = current_desc.len - desc_offset;
+            if (desc_len > remaining) {
+                desc_len = remaining;
             }
+
+            iovecs[iovec_idx] = .{
+                .base = guest_memory.ptrAt(current_desc.addr + desc_offset),
+                .len = desc_len,
+            };
+            iovec_idx += 1;
+            remaining -= desc_len;
+
+            if (remaining == 0) break;
+
+            current_desc_idx = if (current_desc.flags.virtq_desc_f_next) current_desc.next else null;
         }
 
-        return i;
+        return iovec_idx;
     }
 };
 
 pub const Writer = struct {
     chain: DescriptorChain,
     bytes_written: u32,
+    size: u32,
 
+    // Tracks the first writable descriptor in the chain.
+    start_idx: ?u16,
+
+    // Tracks the current descriptor being written to for the write method.
     current_desc_idx: ?u16,
     current_desc_bytes_written: usize,
 
@@ -290,42 +342,85 @@ pub const Writer = struct {
             }
         }
 
+        // Calculate the size of the writable portion of the descriptor chain.
+        var size: u32 = 0;
+        var curr = current_desc_idx;
+        while (curr) |desc_idx| {
+            const d = chain.desc_table[desc_idx];
+            size += d.len;
+            curr = if (d.flags.virtq_desc_f_next) d.next else null;
+        }
+
         return .{
             .chain = chain,
+            .size = size,
             .bytes_written = 0,
+            .start_idx = current_desc_idx,
             .current_desc_idx = current_desc_idx,
             .current_desc_bytes_written = 0,
         };
     }
 
-    pub fn getIovecs(
+    /// Populates the provided iovecs with the writable portion of the
+    /// descriptor chain for the provided offset and length.
+    pub fn slice(
         self: *Writer,
         guest_memory: GuestMemory,
         iovecs: []posix.iovec,
+        offset: usize,
+        len: usize,
     ) !usize {
-        var current_desc_idx: ?u16 = self.current_desc_idx;
-        var i: usize = 0;
+        if (len == 0) return 0;
+
+        if (len > self.size) {
+            return error.InvalidLength;
+        }
+        if (len + offset > self.size) {
+            return error.InvalidOffset;
+        }
+
+        var current_desc_idx: ?u16 = self.start_idx;
+        var iovec_idx: usize = 0;
+        var skipped: usize = 0;
+        var remaining: usize = len;
         while (current_desc_idx) |desc_idx| {
             const current_desc = &self.chain.desc_table[desc_idx];
-            if (i >= iovecs.len) {
-                std.log.err("Not enough iovecs {} >= {}", .{ i, iovecs.len });
+
+            var desc_offset: usize = 0;
+            if (skipped < offset) {
+                if (skipped + current_desc.len <= offset) {
+                    skipped += current_desc.len;
+                    current_desc_idx = if (current_desc.flags.virtq_desc_f_next) current_desc.next else null;
+                    continue;
+                }
+
+                desc_offset = offset - skipped;
+                skipped = offset;
+            }
+
+            if (iovec_idx >= iovecs.len) {
+                std.log.err("Not enough iovecs {} >= {}", .{ iovec_idx, iovecs.len });
                 return error.NotEnoughIovecs;
             }
 
-            iovecs[i] = .{
-                .base = @ptrCast(guest_memory.slice(current_desc.addr, current_desc.len)),
-                .len = current_desc.len,
-            };
-            i += 1;
-
-            if (current_desc.flags.virtq_desc_f_next) {
-                current_desc_idx = current_desc.next;
-            } else {
-                current_desc_idx = null;
+            var desc_len = current_desc.len - desc_offset;
+            if (desc_len > remaining) {
+                desc_len = remaining;
             }
+
+            iovecs[iovec_idx] = .{
+                .base = guest_memory.ptrAt(current_desc.addr + desc_offset),
+                .len = desc_len,
+            };
+            iovec_idx += 1;
+            remaining -= desc_len;
+
+            if (remaining == 0) break;
+
+            current_desc_idx = if (current_desc.flags.virtq_desc_f_next) current_desc.next else null;
         }
 
-        return i;
+        return iovec_idx;
     }
 
     pub fn write(

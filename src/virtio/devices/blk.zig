@@ -8,10 +8,12 @@ const Queue = @import("../queue.zig").Queue;
 const Interrupt = @import("../transport/mmio.zig").Interrupt;
 const EventController = @import("../../EventController.zig");
 const GuestMemory = @import("../../GuestMemory.zig");
+const EventFd = @import("../../EventFd.zig");
 
 const REQUEST_Q1: u32 = 0;
 
 const REQUEST_Q1_EVT: u32 = 0;
+const RING_EVT: u32 = 1;
 
 const SECTOR_SIZE_BYTES = 512;
 const SEG_MAX = 128;
@@ -98,7 +100,9 @@ pub const Blk = struct {
     interrupt: Interrupt,
     active: bool = false,
 
-    file: std.fs.File,
+    file: posix.fd_t,
+    ring: linux.IoUring,
+    ring_evt: EventFd,
     config: Config,
 
     interface: Device,
@@ -112,17 +116,39 @@ pub const Blk = struct {
         var interrupt = try Interrupt.init();
         errdefer interrupt.deinit();
 
-        const file = try std.fs.cwd().createFile(path, .{
-            .read = true,
-            .truncate = false,
-        });
-        errdefer file.close();
+        var ring = try linux.IoUring.init(1024, 0);
+        errdefer ring.deinit();
 
-        const stat = try file.stat();
+        var ring_evt = try EventFd.init();
+        errdefer ring_evt.close();
+
+        try ring.register_eventfd(ring_evt.fd);
+
+        // We expect the kernel to support stable submission.
+        if (ring.features & linux.IORING_FEAT_SUBMIT_STABLE == 0) {
+            return error.RequiresStableSubmission;
+        }
+
+        const file = try posix.open(
+            path,
+            .{
+                .CLOEXEC = true,
+                .NONBLOCK = true,
+                .CREAT = true,
+                .ACCMODE = .RDWR,
+            },
+            0o755,
+        );
+        errdefer posix.close(file);
+
+        const stat = try posix.fstat(file);
+        if (@rem(stat.size, SECTOR_SIZE_BYTES) != 0) {
+            return error.InvalidFileSize;
+        }
 
         var config = std.mem.zeroes(Config);
         config.blk_size = 4096;
-        config.capacity = stat.size / SECTOR_SIZE_BYTES;
+        config.capacity = @divExact(@as(u64, @intCast(stat.size)), SECTOR_SIZE_BYTES);
         config.size_max = std.math.maxInt(u32);
         config.seg_max = SEG_MAX;
 
@@ -132,6 +158,8 @@ pub const Blk = struct {
             .queues = .{try Queue.init(256)},
             .interrupt = interrupt,
             .file = file,
+            .ring = ring,
+            .ring_evt = ring_evt,
             .interface = initInterface(),
             .config = config,
         };
@@ -140,6 +168,8 @@ pub const Blk = struct {
     pub fn deinit(self: *Blk) void {
         self.interrupt.deinit();
         self.file.close();
+        self.ring.deinit();
+        self.ring_evt.close();
     }
 
     fn initInterface() Device {
@@ -212,6 +242,16 @@ pub const Blk = struct {
         try self.queues[REQUEST_Q1].eventfd.read();
         var used_desc = false;
         var queue = &self.queues[REQUEST_Q1];
+        var should_submit_ring = false;
+
+        // We must store all the iovecs outside of the loop as they must remain valid
+        // until the ring is submitted.
+        // TODO: Is this enough iovecs? Maybe we need to allocate at some point.
+        var iovecs: [posix.IOV_MAX]posix.iovec = undefined;
+        var iovec_idx: usize = 0;
+
+        var ciovecs: [posix.IOV_MAX]posix.iovec_const = undefined;
+        var ciovec_idx: usize = 0;
 
         while (queue.pop()) |d| {
             const buffer = self.guest_memory.slice(d.addr, d.len);
@@ -220,64 +260,118 @@ pub const Blk = struct {
             const offset = req.sector * SECTOR_SIZE_BYTES;
 
             var writer = d.writer();
-            var write_iovec: [1024]posix.iovec = undefined;
-            const write_iovec_len = try writer.getIovecs(self.guest_memory, &write_iovec);
-
-            if (write_iovec_len == 0) {
-                return error.FailedToGetIovecs;
-            }
-
-            var len: u64 = 0;
-            for (write_iovec[0..write_iovec_len]) |*iov| {
-                len += iov.len;
-            }
-
-            // Save the last byte of the iovec to write the status.
-            var last_iovec = &write_iovec[write_iovec_len - 1];
-            last_iovec.len -= 1;
 
             var status = RequestStatus.OK;
+            var async = false;
             if (req.type == RequestType.IN) {
-                const written = self.file.preadvAll(
-                    write_iovec[0..write_iovec_len],
-                    offset,
-                ) catch |err| blk: {
-                    std.log.err("Failed to read from file: {}", .{err});
-                    status = RequestStatus.IOERR;
-                    break :blk 0;
-                };
-                std.debug.assert(written == len - 1);
-            } else if (req.type == RequestType.OUT) {
-                var reader = d.reader();
-                var read_iovec: [1024]posix.iovec_const = undefined;
-                const read_iovec_len = try reader.getIovecs(self.guest_memory, &read_iovec);
-                if (read_iovec_len == 0) {
+                const write_iovec_len = try writer.slice(
+                    self.guest_memory,
+                    iovecs[iovec_idx..],
+                    0,
+                    writer.size - 1,
+                );
+
+                const write_iovecs = iovecs[iovec_idx..][0..write_iovec_len];
+                iovec_idx += write_iovec_len;
+                if (write_iovec_len == 0) {
                     return error.FailedToGetIovecs;
                 }
 
-                std.debug.assert(read_iovec[0].len >= Request.HEADER_LEN);
-                read_iovec[0].base += Request.HEADER_LEN;
-                read_iovec[0].len -= Request.HEADER_LEN;
+                async = true;
+                _ = self.ring.read(d.idx, self.file, .{ .iovecs = write_iovecs }, offset) catch |err| blk: {
+                    std.log.err("Failed to queue file read: {}", .{err});
+                    async = false;
+                    status = RequestStatus.IOERR;
+                    break :blk null;
+                };
+                should_submit_ring = true;
+            } else if (req.type == RequestType.OUT) {
+                var reader = d.reader();
 
-                self.file.pwritevAll(
-                    read_iovec[0..read_iovec_len],
-                    offset,
-                ) catch |err| {
-                    std.log.err("Failed to write to file: {}", .{err});
+                const read_iovec_len = try reader.slice(
+                    self.guest_memory,
+                    ciovecs[ciovec_idx..],
+                    Request.HEADER_LEN,
+                    reader.size - Request.HEADER_LEN,
+                );
+                if (read_iovec_len == 0) {
+                    return error.FailedToGetIovecs;
+                }
+                const read_iovecs = ciovecs[ciovec_idx..][0..read_iovec_len];
+                ciovec_idx += read_iovec_len;
+
+                async = true;
+                _ = self.ring.writev(d.idx, self.file, read_iovecs, offset) catch |err| blk: {
+                    std.log.err("Failed to queue file write: {}", .{err});
+                    async = false;
                     status = RequestStatus.IOERR;
+                    break :blk null;
                 };
+                should_submit_ring = true;
             } else if (req.type == RequestType.FLUSH) {
-                self.file.sync() catch |err| {
-                    std.log.err("Failed to sync file: {}", .{err});
+                async = true;
+                _ = self.ring.fsync(d.idx, self.file, 0) catch |err| blk: {
+                    std.log.err("Failed to queue file fsync: {}", .{err});
+                    async = false;
                     status = RequestStatus.IOERR;
+                    break :blk null;
                 };
+                should_submit_ring = true;
             } else {
                 status = RequestStatus.UNSUPP;
             }
 
-            last_iovec.base[last_iovec.len] = status;
-            queue.addUsed(d.idx, @intCast(len));
-            used_desc = true;
+            if (!async) {
+                // We're just using the iovec to get the address of the status byte.
+                // No need to use the shared iovecs array.
+                // In the future we can add more ergonomics to the writer to avoid this.
+                var status_iovecs: [1]posix.iovec = undefined;
+                _ = try writer.slice(self.guest_memory, &status_iovecs, writer.size - 1, 1);
+                status_iovecs[0].base[0] = status;
+                queue.addUsed(d.idx, @intCast(writer.size));
+                used_desc = true;
+            }
+        }
+
+        if (should_submit_ring) {
+            _ = try self.ring.submit();
+        }
+
+        return used_desc;
+    }
+
+    fn handleRingCompletions(self: *Blk) !bool {
+        try self.ring_evt.read();
+        var used_desc = false;
+
+        while (true) {
+            var cqes: [posix.IOV_MAX]linux.io_uring_cqe = undefined;
+            const len = try self.ring.copy_cqes(&cqes, 0);
+            if (len == 0) break;
+
+            for (cqes[0..len]) |cqe| {
+                const desc_idx: u16 = @intCast(cqe.user_data);
+                const queue = &self.queues[REQUEST_Q1];
+                var desc = queue.getDesc(desc_idx) orelse return error.MissingDesc;
+
+                var writer = desc.writer();
+
+                var status = RequestStatus.OK;
+                switch (cqe.err()) {
+                    .SUCCESS => {},
+                    else => |errno| {
+                        std.log.err("completion error: {}", .{errno});
+                        status = RequestStatus.IOERR;
+                    },
+                }
+
+                var status_iovecs: [1]posix.iovec = undefined;
+                _ = try writer.slice(self.guest_memory, &status_iovecs, writer.size - 1, 1);
+                status_iovecs[0].base[0] = status;
+
+                queue.addUsed(desc_idx, @intCast(writer.size));
+                used_desc = true;
+            }
         }
 
         return used_desc;
@@ -299,6 +393,12 @@ pub const Blk = struct {
                     return;
                 };
             },
+            RING_EVT => {
+                desc_used = self.handleRingCompletions() catch |err| {
+                    std.log.err("Failed to handle ring event: {}", .{err});
+                    return;
+                };
+            },
             else => unreachable,
         }
 
@@ -315,6 +415,13 @@ pub const Blk = struct {
             linux.EPOLL.IN,
             self,
             REQUEST_Q1_EVT,
+            &processEvent,
+        );
+        try ec.register(
+            self.ring_evt.fd,
+            linux.EPOLL.IN,
+            self,
+            RING_EVT,
             &processEvent,
         );
     }

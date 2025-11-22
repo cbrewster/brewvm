@@ -31,6 +31,11 @@ pub fn slice(self: *const Self, offset: usize, len: usize) []u8 {
     return self.bytes[offset..][0..len];
 }
 
+pub fn ptrAt(self: *const Self, addr: usize) [*]u8 {
+    std.debug.assert(addr <= self.len);
+    return self.bytes.ptr + addr;
+}
+
 pub fn writeAt(self: *const Self, offset: usize, buf: []const u8) void {
     std.debug.assert(offset + buf.len <= self.len);
     @memcpy(self.bytes[offset..][0..buf.len], buf);
