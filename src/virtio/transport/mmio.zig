@@ -16,7 +16,6 @@ const kvm_irq_line = ioctl.IoctlW(c.KVM_IRQ_LINE, *const c.kvm_irq_level);
 const kvm_ioeventfd = ioctl.IoctlW(c.KVM_IOEVENTFD, *const c.kvm_ioeventfd);
 const kvm_irqfd = ioctl.IoctlW(c.KVM_IRQFD, *const c.kvm_irqfd);
 
-const Console = @import("../devices/console.zig").Console;
 const DeviceFeatures = @import("../devices/flags.zig").DeviceFeatures;
 
 /// Virtio MMIO register offsets (from the spec)

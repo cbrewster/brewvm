@@ -10,6 +10,7 @@ const layout = @import("layout.zig");
 const paging = @import("paging.zig");
 const mmio = @import("virtio/transport/mmio.zig");
 const Console = @import("virtio/devices/console.zig").Console;
+const Blk = @import("virtio/devices/blk.zig").Blk;
 const getBootParams = @import("kernel.zig").getBootParams;
 const c = @import("c.zig").c;
 
@@ -228,10 +229,10 @@ pub fn addVirtioConsole(self: *Self) !void {
 
     self.original_termios = original_termios;
 
+    // TODO: Deinit devices, leaking atm!
     var console = try self.gpa.create(Console);
     errdefer self.gpa.destroy(console);
 
-    // TODO: Deinit devices, leaking atm!
     try console.init(
         self.gpa,
         self.guest_memory,
@@ -242,10 +243,31 @@ pub fn addVirtioConsole(self: *Self) !void {
 
     var mmio_device = mmio.MmioTransport.init(
         self.guest_memory,
+        // TODO: Dynamically determine irq number and offset!
         5,
         layout.VIRTIO_MMIO_BASE,
         mmio.DeviceId.CONSOLE,
         &console.interface,
+    );
+
+    // TODO: Errdefer dergister events.
+    try mmio_device.registerIoEventFd(&self.vm);
+    try mmio_device.registerEvents(&self.event_controller);
+
+    try self.mmio_devices.append(self.gpa, mmio_device);
+}
+
+pub fn addBlkDevice(self: *Self, path: []const u8) !void {
+    // TODO: Deinit devices, leaking atm!
+    var blk = try self.gpa.create(Blk);
+    errdefer self.gpa.destroy(blk);
+    try blk.init(self.gpa, self.guest_memory, path);
+    var mmio_device = mmio.MmioTransport.init(
+        self.guest_memory,
+        6,
+        layout.VIRTIO_MMIO_BASE + layout.VIRTIO_MMIO_DEVICE_SIZE,
+        mmio.DeviceId.BLOCK,
+        &blk.interface,
     );
 
     // TODO: Errdefer dergister events.

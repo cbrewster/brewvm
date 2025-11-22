@@ -9,6 +9,7 @@ pub fn startVm(gpa: std.mem.Allocator) !void {
     defer vmm.deinit();
 
     try vmm.addVirtioConsole();
+    try vmm.addBlkDevice("disk.img");
 
     try vmm.loadKernel(
         "console=hvc0 loglevel=8 rdinit=/init panic=-1",

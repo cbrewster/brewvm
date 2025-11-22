@@ -208,6 +208,8 @@ pub const Console = struct {
         var desc = queue.pop();
         while (desc) |d| {
             const buf = self.guest_memory.slice(d.addr, d.len);
+            // FIXME: Handle stdout wouldblock: buffer and wait for notification
+            // that we can write to stdout again. Maybe add backpressure?
             self.stdout.writeAll(buf) catch |err|
                 std.log.err("Failed to write to stdout: {}", .{err});
             queue.addUsed(d.idx, 0);

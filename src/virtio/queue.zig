@@ -1,5 +1,6 @@
 const std = @import("std");
 const linux = std.os.linux;
+const posix = std.posix;
 
 const GuestMemory = @import("../GuestMemory.zig");
 const EventFd = @import("../EventFd.zig");
@@ -209,6 +210,66 @@ pub const DescriptorChain = struct {
     pub fn writer(self: DescriptorChain) Writer {
         return .init(self);
     }
+
+    pub fn reader(self: DescriptorChain) Reader {
+        return .init(self);
+    }
+};
+
+pub const Reader = struct {
+    chain: DescriptorChain,
+    bytes_read: u32,
+
+    current_desc_idx: ?u16,
+    current_desc_bytes_read: usize,
+
+    fn init(chain: DescriptorChain) Reader {
+        var current_desc_idx: ?u16 = chain.idx;
+        if (chain.isWriteOnly()) {
+            current_desc_idx = null;
+        }
+
+        return .{
+            .chain = chain,
+            .bytes_read = 0,
+            .current_desc_idx = current_desc_idx,
+            .current_desc_bytes_read = 0,
+        };
+    }
+
+    pub fn getIovecs(
+        self: *Reader,
+        guest_memory: GuestMemory,
+        iovecs: []posix.iovec_const,
+    ) !usize {
+        var current_desc_idx: ?u16 = self.current_desc_idx;
+        var i: usize = 0;
+        while (current_desc_idx) |desc_idx| {
+            const current_desc = &self.chain.desc_table[desc_idx];
+            if (current_desc.flags.virtq_desc_f_write) {
+                break;
+            }
+
+            if (i >= iovecs.len) {
+                std.log.err("Not enough iovecs {} >= {}", .{ i, iovecs.len });
+                return error.NotEnoughIovecs;
+            }
+
+            iovecs[i] = .{
+                .base = @ptrCast(guest_memory.slice(current_desc.addr, current_desc.len)),
+                .len = current_desc.len,
+            };
+            i += 1;
+
+            if (current_desc.flags.virtq_desc_f_next) {
+                current_desc_idx = current_desc.next;
+            } else {
+                current_desc_idx = null;
+            }
+        }
+
+        return i;
+    }
 };
 
 pub const Writer = struct {
@@ -232,9 +293,39 @@ pub const Writer = struct {
         return .{
             .chain = chain,
             .bytes_written = 0,
-            .current_desc_idx = chain.idx,
+            .current_desc_idx = current_desc_idx,
             .current_desc_bytes_written = 0,
         };
+    }
+
+    pub fn getIovecs(
+        self: *Writer,
+        guest_memory: GuestMemory,
+        iovecs: []posix.iovec,
+    ) !usize {
+        var current_desc_idx: ?u16 = self.current_desc_idx;
+        var i: usize = 0;
+        while (current_desc_idx) |desc_idx| {
+            const current_desc = &self.chain.desc_table[desc_idx];
+            if (i >= iovecs.len) {
+                std.log.err("Not enough iovecs {} >= {}", .{ i, iovecs.len });
+                return error.NotEnoughIovecs;
+            }
+
+            iovecs[i] = .{
+                .base = @ptrCast(guest_memory.slice(current_desc.addr, current_desc.len)),
+                .len = current_desc.len,
+            };
+            i += 1;
+
+            if (current_desc.flags.virtq_desc_f_next) {
+                current_desc_idx = current_desc.next;
+            } else {
+                current_desc_idx = null;
+            }
+        }
+
+        return i;
     }
 
     pub fn write(
