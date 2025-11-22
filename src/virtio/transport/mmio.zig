@@ -8,6 +8,7 @@ const EventController = @import("../../EventController.zig");
 const EventFd = @import("../../EventFd.zig");
 const GuestMemory = @import("../../GuestMemory.zig");
 const Vm = @import("../../vm.zig").Vm;
+const Device = @import("../device.zig").Device;
 
 const linux = std.os.linux;
 
@@ -154,17 +155,16 @@ pub const MmioTransport = struct {
     guest_memory: GuestMemory,
 
     device_lock: std.Thread.Mutex,
-    device: Console,
+    device: *Device,
 
     pub fn init(
-        self: *MmioTransport,
         guest_memory: GuestMemory,
         irq: u32,
         base_addr: u64,
         device_id: u32,
-        device: Console,
-    ) !void {
-        self.* = .{
+        device: *Device,
+    ) MmioTransport {
+        return .{
             .base_addr = base_addr,
             .device_id = device_id,
             .vendor_id = 0x57455242, // "BREW" in little-endian
@@ -181,12 +181,8 @@ pub const MmioTransport = struct {
         };
     }
 
-    pub fn deinit(self: *MmioTransport) void {
-        self.device.deinit();
-    }
-
     pub fn registerIoEventFd(self: *MmioTransport, vm: *Vm) !void {
-        try self.device.interrupt.register(vm, self.irq);
+        try self.device.getInterrupt().register(vm, self.irq);
         for (self.device.getQueues(), 0..) |*queue, i| {
             try vm.ioeventfd(&.{
                 .addr = self.base_addr + Registers.QUEUE_NOTIFY,
@@ -200,19 +196,6 @@ pub const MmioTransport = struct {
 
     pub fn registerEvents(self: *MmioTransport, ec: *EventController) !void {
         try self.device.registerEvents(ec);
-    }
-
-    pub fn handleEvent(self: *MmioTransport, event: linux.epoll_event) !void {
-        self.device_lock.lock();
-        defer self.device_lock.unlock();
-
-        const queues = self.device.getQueues();
-        var buf: [8]u8 = undefined;
-        if (event.data.u64 < queues.len) {
-            _ = try std.posix.read(queues[event.data.u64].eventfd, &buf);
-        }
-
-        try self.device.processEvent(event.data.u64, self.guest_memory, &self.interrupt);
     }
 
     pub fn set_device_status(self: *MmioTransport, new_status: u32) void {
@@ -304,8 +287,9 @@ pub const MmioTransport = struct {
                 if (ready) return 1 else return 0;
             },
             Registers.INTERRUPT_STATUS => {
-                std.log.debug("    <- INTERRUPT_STATUS = 0x{X}\n", .{self.device.interrupt.irq_status});
-                return self.device.interrupt.irq_status;
+                const irq_status = self.device.getInterrupt().irq_status;
+                std.log.debug("    <- INTERRUPT_STATUS = 0x{X}\n", .{irq_status});
+                return irq_status;
             },
             Registers.STATUS => {
                 std.log.debug("    <- STATUS = 0b{b}\n", .{self.status});
@@ -365,7 +349,7 @@ pub const MmioTransport = struct {
             },
             Registers.INTERRUPT_ACK => {
                 std.log.debug("    -> INTERRUPT_ACK\n", .{});
-                self.device.interrupt.irq_status &= ~value;
+                self.device.getInterrupt().irq_status &= ~value;
             },
             Registers.STATUS => {
                 std.log.debug("    -> STATUS = 0b{b}\n", .{value});

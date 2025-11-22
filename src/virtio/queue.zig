@@ -10,6 +10,11 @@ const AVAILABLE_SIZE: u32 = @sizeOf(u16);
 pub const Queue = struct {
     const Self = @This();
 
+    pub const Error = error{
+        QueueNotReady,
+        InvalidQueueSize,
+    };
+
     eventfd: EventFd,
 
     // Max size offered by the device
@@ -47,7 +52,7 @@ pub const Queue = struct {
     pub fn activate(
         self: *Self,
         guest_memory: GuestMemory,
-    ) !void {
+    ) Error!void {
         if (!self.ready) {
             return error.QueueNotReady;
         }

@@ -31,7 +31,7 @@ vm: Vm,
 vcpu: Vcpu,
 guest_memory: GuestMemory,
 event_controller: EventController,
-mmio_devices: ArrayList(*mmio.MmioTransport),
+mmio_devices: ArrayList(mmio.MmioTransport),
 original_termios: ?std.posix.termios,
 
 pub fn init(gpa: std.mem.Allocator) !Self {
@@ -70,16 +70,12 @@ pub fn init(gpa: std.mem.Allocator) !Self {
         .vcpu = vcpu,
         .guest_memory = guest_memory,
         .event_controller = event_controller,
-        .mmio_devices = ArrayList(*mmio.MmioTransport).empty,
+        .mmio_devices = ArrayList(mmio.MmioTransport).empty,
         .original_termios = null,
     };
 }
 
 pub fn deinit(self: *Self) void {
-    for (self.mmio_devices.items) |mmio_device| {
-        mmio_device.deinit();
-        self.gpa.destroy(mmio_device);
-    }
     self.mmio_devices.deinit(self.gpa);
     self.event_controller.deinit();
     self.vcpu.deinit();
@@ -192,9 +188,6 @@ pub fn loadKernel(
 }
 
 pub fn addVirtioConsole(self: *Self) !void {
-    var mmio_device = try self.gpa.create(mmio.MmioTransport);
-    errdefer self.gpa.destroy(mmio_device);
-
     const stdin = std.fs.File.stdin();
     const stdout = std.fs.File.stdout();
 
@@ -235,7 +228,11 @@ pub fn addVirtioConsole(self: *Self) !void {
 
     self.original_termios = original_termios;
 
-    var console = try Console.init(
+    var console = try self.gpa.create(Console);
+    errdefer self.gpa.destroy(console);
+
+    // TODO: Deinit devices, leaking atm!
+    try console.init(
         self.gpa,
         self.guest_memory,
         stdin,
@@ -243,14 +240,13 @@ pub fn addVirtioConsole(self: *Self) !void {
     );
     errdefer console.deinit();
 
-    try mmio_device.init(
+    var mmio_device = mmio.MmioTransport.init(
         self.guest_memory,
         5,
         layout.VIRTIO_MMIO_BASE,
         mmio.DeviceId.CONSOLE,
-        console,
+        &console.interface,
     );
-    errdefer mmio_device.deinit();
 
     // TODO: Errdefer dergister events.
     try mmio_device.registerIoEventFd(&self.vm);
@@ -325,7 +321,7 @@ pub fn vcpu_thread(self: *Self, vcpu: *Vcpu) !void {
                 const phys_addr = mmio_data.phys_addr;
                 const is_write = mmio_data.is_write != 0;
 
-                for (self.mmio_devices.items) |mmio_device| {
+                for (self.mmio_devices.items) |*mmio_device| {
                     // Check if this is accessing our virtio-mmio device
                     if (phys_addr >= mmio_device.base_addr and
                         phys_addr < mmio_device.base_addr + layout.VIRTIO_MMIO_DEVICE_SIZE)

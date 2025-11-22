@@ -2,6 +2,7 @@ const std = @import("std");
 const linux = std.os.linux;
 const ArrayList = std.ArrayList;
 
+const Device = @import("../device.zig").Device;
 const Queue = @import("../queue.zig").Queue;
 const Interrupt = @import("../transport/mmio.zig").Interrupt;
 const EventController = @import("../../EventController.zig");
@@ -49,12 +50,15 @@ pub const Console = struct {
 
     buffer: ArrayList(u8),
 
+    interface: Device,
+
     pub fn init(
+        self: *Console,
         gpa: std.mem.Allocator,
         guest_memory: GuestMemory,
         stdout: std.fs.File,
         stdin: std.fs.File,
-    ) !Console {
+    ) !void {
         var interrupt = try Interrupt.init();
         errdefer interrupt.deinit();
 
@@ -75,7 +79,7 @@ pub const Console = struct {
         var winsize: std.posix.winsize = undefined;
         _ = try iocgwinsz(stdout.handle, &winsize);
 
-        return .{
+        self.* = .{
             .sigwinch_signalfd = sigwinch_signalfd,
             .gpa = gpa,
             .guest_memory = guest_memory,
@@ -88,6 +92,23 @@ pub const Console = struct {
             .buffer = try ArrayList(u8).initCapacity(gpa, 4096),
             .interrupt = interrupt,
             .size = winsize,
+            .interface = initInterface(),
+        };
+    }
+
+    fn initInterface() Device {
+        return .{
+            .vtable = &.{
+                .getInterrupt = getInterrupt,
+                .getQueue = getQueue,
+                .getQueues = getQueues,
+                .readConfig = readConfig,
+                .writeConfig = writeConfig,
+                .supportedFeatures = supportedFeatures,
+                .isActive = isActive,
+                .activate = activate,
+                .registerEvents = registerEvents,
+            },
         };
     }
 
@@ -96,48 +117,59 @@ pub const Console = struct {
         self.interrupt.deinit();
     }
 
-    pub fn getQueue(self: *Console, queue: u32) *Queue {
+    pub fn getInterrupt(d: *Device) *Interrupt {
+        const self: *Console = @alignCast(@fieldParentPtr("interface", d));
+        return &self.interrupt;
+    }
+
+    pub fn getQueue(d: *Device, queue: u32) *Queue {
+        const self: *Console = @alignCast(@fieldParentPtr("interface", d));
         return &self.queues[@intCast(queue)];
     }
 
-    pub fn getQueues(self: *Console) []Queue {
+    pub fn getQueues(d: *Device) []Queue {
+        const self: *Console = @alignCast(@fieldParentPtr("interface", d));
         return &self.queues;
     }
 
-    pub fn readConfig(self: *Console, offset: u64, data: []u8) !void {
+    pub fn readConfig(d: *Device, offset: u64, data: []u8) Device.Error!void {
+        const self: *Console = @alignCast(@fieldParentPtr("interface", d));
         switch (offset) {
             ConfigOffset.COLS => {
-                if (data.len != @sizeOf(u16)) return error.InvalidLength;
+                if (data.len != @sizeOf(u16)) return error.InvalidRequest;
                 std.mem.writeInt(u16, @ptrCast(data), self.size.col, .little);
             },
             ConfigOffset.ROWS => {
-                if (data.len != @sizeOf(u16)) return error.InvalidLength;
+                if (data.len != @sizeOf(u16)) return error.InvalidRequest;
                 std.mem.writeInt(u16, @ptrCast(data), self.size.row, .little);
             },
-            else => return error.InvalidOffset,
+            else => return error.InvalidRequest,
         }
     }
 
-    pub fn writeConfig(self: *Console, offset: u64, data: []const u8) !void {
+    pub fn writeConfig(d: *Device, offset: u64, data: []const u8) Device.Error!void {
+        const self: *Console = @alignCast(@fieldParentPtr("interface", d));
         switch (offset) {
             ConfigOffset.EMERG_WR => {
-                if (data.len != @sizeOf(u32)) return error.InvalidLength;
+                if (data.len != @sizeOf(u32)) return error.InvalidRequest;
                 try self.stdout.writeAll(data);
             },
-            else => return error.InvalidOffset,
+            else => return error.InvalidRequest,
         }
     }
 
-    pub fn supportedFeatures(self: *Console) u64 {
-        _ = self;
+    pub fn supportedFeatures(d: *Device) u64 {
+        _ = d;
         return Features.VIRTIO_CONSOLE_F_SIZE;
     }
 
-    pub fn isActive(self: *Console) bool {
+    pub fn isActive(d: *Device) bool {
+        const self: *Console = @alignCast(@fieldParentPtr("interface", d));
         return self.active;
     }
 
-    pub fn activate(self: *Console, guest_memory: GuestMemory) !void {
+    pub fn activate(d: *Device, guest_memory: GuestMemory) Device.Error!void {
+        const self: *Console = @alignCast(@fieldParentPtr("interface", d));
         for (&self.queues) |*queue| {
             try queue.activate(guest_memory);
         }
@@ -256,7 +288,8 @@ pub const Console = struct {
         }
     }
 
-    pub fn registerEvents(self: *Console, ec: *EventController) !void {
+    pub fn registerEvents(d: *Device, ec: *EventController) EventController.Error!void {
+        const self: *Console = @alignCast(@fieldParentPtr("interface", d));
         try ec.register(
             self.queues[RECEIVE_Q0].eventfd.fd,
             linux.EPOLL.IN,

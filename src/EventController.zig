@@ -15,6 +15,8 @@ epoll_fd: posix.fd_t,
 exit_evt: EventFd,
 handlers: std.AutoHashMap(posix.fd_t, Callback),
 
+pub const Error = std.posix.EpollCtlError || std.mem.Allocator.Error;
+
 /// Initializes the event controller.
 pub fn init(gpa: std.mem.Allocator) !Self {
     const epoll_fd = try posix.epoll_create1(linux.EPOLL.CLOEXEC);
@@ -54,7 +56,7 @@ pub fn register(
     context: anytype,
     userdata: u32,
     callback: *const fn (@TypeOf(context), userdata: u32, events: u32) void,
-) !void {
+) Error!void {
     try self.handlers.put(fd, .{ .context = context, .callback = @ptrCast(callback) });
     const data = (@as(u64, @intCast(fd)) << 32) | userdata;
     var event = linux.epoll_event{ .events = events, .data = .{ .u64 = data } };

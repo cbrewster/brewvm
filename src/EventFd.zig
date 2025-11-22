@@ -28,7 +28,7 @@ pub fn close(self: *const Self) void {
 }
 
 /// Writes 1 to the eventfd.
-pub fn write(self: *const Self) !void {
+pub fn write(self: *const Self) posix.WriteError!void {
     _ = posix.write(self.fd, &[8]u8{ 0, 0, 0, 0, 0, 0, 0, 1 }) catch |e| switch (e) {
         error.WouldBlock => {},
         else => |err| return err,
@@ -36,7 +36,7 @@ pub fn write(self: *const Self) !void {
 }
 
 /// Reads the eventfd.
-pub fn read(self: *const Self) !void {
+pub fn read(self: *const Self) posix.ReadError!void {
     var buf: [8]u8 = undefined;
     _ = posix.read(self.fd, &buf) catch |e| switch (e) {
         error.WouldBlock => {},
