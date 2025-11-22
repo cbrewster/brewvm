@@ -287,7 +287,10 @@ pub fn vcpu_thread(self: *Self, vcpu: *Vcpu) !void {
                 const io = kvm_run_data.*.unnamed_0.io;
                 const port = io.port;
                 const offset = io.data_offset;
-                const data_ptr: [*]u8 = @ptrFromInt(@intFromPtr(kvm_run_data) + offset);
+                const data_ptr: []u8 = @as(
+                    [*]u8,
+                    @ptrFromInt(@intFromPtr(kvm_run_data) + offset),
+                )[0..io.size];
 
                 if (port == 0x3f8) {
                     const byte = data_ptr[0];
@@ -304,6 +307,12 @@ pub fn vcpu_thread(self: *Self, vcpu: *Vcpu) !void {
                                 buffer_len += 1;
                             }
                         },
+                    }
+                } else if (port == 0x64) {
+                    if (io.direction == 1 and data_ptr.len == 1 and data_ptr[0] == 0xfe) {
+                        std.log.info("Received keyboard controller reset, stopping VMM", .{});
+                        try self.event_controller.stop();
+                        break;
                     }
                 }
 
@@ -337,7 +346,7 @@ pub fn vcpu_thread(self: *Self, vcpu: *Vcpu) !void {
                 }
             },
             else => {
-                std.debug.print("Unhandled KVM exit reason: {}\n", .{kvm_run_data.exit_reason});
+                std.log.warn("Unhandled KVM exit reason: {}\n", .{kvm_run_data.exit_reason});
                 return error.UnhandledKvmExit;
             },
         }
