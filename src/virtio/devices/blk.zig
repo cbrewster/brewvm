@@ -136,6 +136,7 @@ pub const Blk = struct {
                 .NONBLOCK = true,
                 .CREAT = true,
                 .ACCMODE = .RDWR,
+                .DIRECT = true,
             },
             0o755,
         );

@@ -14,7 +14,7 @@ pub fn startVm(gpa: std.mem.Allocator) !void {
     try vmm.loadKernel(
         "console=hvc0 loglevel=8 rdinit=/init panic=-1",
         "result/bzImage",
-        "initramfs",
+        "result/initrd.cpio",
     );
 
     var sigmask = std.posix.sigemptyset();
