@@ -33,6 +33,7 @@
         pkgs.iproute2
         pkgs.iputils
         pkgs.less
+        pkgs.e2fsprogs
       ];
       initrdBinPath = lib.makeBinPath initrdPackages;
       initScript = pkgs.writeScript "brewvm-init" ''
