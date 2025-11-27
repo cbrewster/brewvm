@@ -328,6 +328,10 @@ pub const MmioTransport = struct {
                     self.driver_features_sel,
                     value,
                 });
+                self.device.setAckedFeaturesPartial(
+                    value,
+                    if (self.driver_features_sel == 0) .low else .high,
+                );
                 self.driver_features[self.driver_features_sel] = value;
             },
             Registers.DRIVER_FEATURES_SEL => {

@@ -27,6 +27,8 @@ pub const Queue = struct {
     // Indicates if the queue has been configured by the driver
     ready: bool = false,
 
+    notification_supression: bool = false,
+
     desc_table_address: u64 = 0,
     avail_ring_address: u64 = 0,
     used_ring_address: u64 = 0,
@@ -37,6 +39,7 @@ pub const Queue = struct {
 
     next_avail: u16 = 0,
     next_used: u16 = 0,
+    num_added: u16 = 0,
 
     pub fn init(max_size: u16) !Self {
         const eventfd = try EventFd.init();
@@ -91,13 +94,33 @@ pub const Queue = struct {
 
     /// Get avail_ring.idx
     pub fn availRingGetIdx(self: *const Self) u16 {
-        return @atomicLoad(u16, &self.avail_ring_ptr[1], .acquire);
+        return @atomicLoad(u16, &self.avail_ring_ptr[1], .seq_cst);
     }
 
+    /// Get avail_ring.used_event
+    pub fn availRingGetUsedEvent(self: *const Self) u16 {
+        return @atomicLoad(u16, &self.avail_ring_ptr[2 + self.size], .seq_cst);
+    }
+
+    /// Get avail_ring.desc[idx]
+    pub fn availRingGetDescIdx(self: *const Self, idx: u16) u16 {
+        return self.avail_ring_ptr[idx + 2];
+    }
+
+    // Set used_ring.idx
     pub fn usedRingSetIdx(self: *Self, idx: u16) void {
         std.log.debug("set used ring idx={}", .{idx});
-        const idx_ptr: *volatile u16 = @ptrCast(self.used_ring_ptr[@sizeOf(u16)..]);
-        @atomicStore(u16, idx_ptr, idx, .release);
+        const idx_ptr: *volatile u16 = @ptrCast(self.used_ring_ptr.ptr + @sizeOf(u16));
+        @atomicStore(u16, idx_ptr, idx, .seq_cst);
+    }
+
+    /// Set used_ring.avail_event
+    pub fn usedRingSetAvailEvent(self: *Self, idx: u16) void {
+        std.log.debug("set used ring avail_event={}", .{idx});
+        const idx_ptr: *volatile u16 = @ptrCast(@alignCast(
+            self.used_ring_ptr.ptr + 2 * @sizeOf(u16) + (self.size * USED_SIZE),
+        ));
+        @atomicStore(u16, idx_ptr, idx, .seq_cst);
     }
 
     pub fn addUsed(self: *Self, idx: u32, len: u32) void {
@@ -110,25 +133,64 @@ pub const Queue = struct {
         len_ptr.* = len;
 
         self.next_used +%= 1;
+        self.num_added +%= 1;
         self.usedRingSetIdx(self.next_used);
-    }
-
-    pub fn availRingGetDescIdx(self: *const Self, idx: u16) u16 {
-        return self.avail_ring_ptr[idx + 2];
     }
 
     pub fn availLen(self: *Self) u16 {
         return self.availRingGetIdx() -% self.next_avail;
     }
 
+    pub fn prepareKick(self: *Self) bool {
+        if (!self.notification_supression) {
+            return true;
+        }
+
+        const used_event = self.availRingGetUsedEvent();
+        const new = self.next_used;
+        const old = self.next_used -% self.num_added;
+
+        self.num_added = 0;
+
+        return new -% used_event -% 1 < new -% old;
+    }
+
     pub fn pop(self: *Self) ?DescriptorChain {
         if (!self.ready) return null;
 
+        if (!self.notification_supression) {
+            return self.popChecked();
+        }
+
+        if (self.enableNofications()) {
+            return null;
+        }
+
+        return self.popUnchecked();
+    }
+
+    fn enableNofications(self: *Self) bool {
+        if (!self.notification_supression) return true;
+
+        if (self.availLen() != 0) {
+            return false;
+        }
+
+        self.usedRingSetAvailEvent(self.next_avail);
+
+        return self.next_avail == self.availRingGetIdx();
+    }
+
+    fn popChecked(self: *Self) ?DescriptorChain {
         const len = self.availLen();
         std.debug.assert(len <= self.size);
 
         if (len == 0) return null;
 
+        return self.popUnchecked();
+    }
+
+    fn popUnchecked(self: *Self) ?DescriptorChain {
         const idx = self.next_avail % self.size;
         self.next_avail +%= 1;
         return DescriptorChain.init(self.desc_table_ptr, self.availRingGetDescIdx(idx));

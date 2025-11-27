@@ -9,6 +9,7 @@ const Interrupt = @import("../transport/mmio.zig").Interrupt;
 const EventController = @import("../../EventController.zig");
 const GuestMemory = @import("../../GuestMemory.zig");
 const EventFd = @import("../../EventFd.zig");
+const DeviceFeatures = @import("flags.zig").DeviceFeatures;
 
 const REQUEST_Q1: u32 = 0;
 
@@ -107,6 +108,8 @@ pub const Blk = struct {
 
     interface: Device,
 
+    acked_features: u64,
+
     pub fn init(
         self: *Blk,
         gpa: std.mem.Allocator,
@@ -163,6 +166,7 @@ pub const Blk = struct {
             .ring_evt = ring_evt,
             .interface = initInterface(),
             .config = config,
+            .acked_features = 0,
         };
     }
 
@@ -179,6 +183,8 @@ pub const Blk = struct {
                 .getInterrupt = getInterrupt,
                 .getQueue = getQueue,
                 .getQueues = getQueues,
+                .getAckedFeatures = getAckedFeatures,
+                .setAckedFeatures = setAckedFeatures,
                 .readConfig = readConfig,
                 .writeConfig = writeConfig,
                 .supportedFeatures = supportedFeatures,
@@ -204,6 +210,16 @@ pub const Blk = struct {
         return &self.queues;
     }
 
+    pub fn getAckedFeatures(d: *Device) u64 {
+        const self: *Blk = @alignCast(@fieldParentPtr("interface", d));
+        return self.acked_features;
+    }
+
+    pub fn setAckedFeatures(d: *Device, features: u64) void {
+        const self: *Blk = @alignCast(@fieldParentPtr("interface", d));
+        self.acked_features = features;
+    }
+
     pub fn readConfig(d: *Device, offset: u64, data: []u8) Device.Error!void {
         const self: *Blk = @alignCast(@fieldParentPtr("interface", d));
 
@@ -223,7 +239,8 @@ pub const Blk = struct {
         return Features.VIRTIO_BLK_F_BLK_SIZE |
             Features.VIRTIO_BLK_F_FLUSH |
             Features.VIRTIO_BLK_F_SIZE_MAX |
-            Features.VIRTIO_BLK_F_SEG_MAX;
+            Features.VIRTIO_BLK_F_SEG_MAX |
+            DeviceFeatures.VIRTIO_F_EVENT_IDX;
     }
 
     pub fn isActive(d: *Device) bool {
@@ -234,12 +251,16 @@ pub const Blk = struct {
     pub fn activate(d: *Device, guest_memory: GuestMemory) Device.Error!void {
         const self: *Blk = @alignCast(@fieldParentPtr("interface", d));
         for (&self.queues) |*queue| {
+            if (self.acked_features & DeviceFeatures.VIRTIO_F_EVENT_IDX != 0) {
+                queue.notification_supression = true;
+            }
+
             try queue.activate(guest_memory);
         }
         try self.interrupt.trigger(Interrupt.VIRTIO_MMIO_INT_CONFIG);
     }
 
-    fn handleRequestQueue(self: *Blk) !bool {
+    fn handleRequestQueue(self: *Blk) !void {
         try self.queues[REQUEST_Q1].eventfd.read();
         var used_desc = false;
         var queue = &self.queues[REQUEST_Q1];
@@ -338,12 +359,17 @@ pub const Blk = struct {
             _ = try self.ring.submit();
         }
 
-        return used_desc;
+        if (used_desc and queue.prepareKick()) {
+            self.interrupt.trigger(Interrupt.VIRTIO_MMIO_INT_VRING) catch |err|
+                std.log.err("Failed to trigger interrupt: {}", .{err});
+        }
     }
 
-    fn handleRingCompletions(self: *Blk) !bool {
+    fn handleRingCompletions(self: *Blk) !void {
         try self.ring_evt.read();
         var used_desc = false;
+
+        const queue = &self.queues[REQUEST_Q1];
 
         while (true) {
             var cqes: [posix.IOV_MAX]linux.io_uring_cqe = undefined;
@@ -352,7 +378,6 @@ pub const Blk = struct {
 
             for (cqes[0..len]) |cqe| {
                 const desc_idx: u16 = @intCast(cqe.user_data);
-                const queue = &self.queues[REQUEST_Q1];
                 var desc = queue.getDesc(desc_idx) orelse return error.MissingDesc;
 
                 var writer = desc.writer();
@@ -375,7 +400,10 @@ pub const Blk = struct {
             }
         }
 
-        return used_desc;
+        if (used_desc and queue.prepareKick()) {
+            self.interrupt.trigger(Interrupt.VIRTIO_MMIO_INT_VRING) catch |err|
+                std.log.err("Failed to trigger interrupt: {}", .{err});
+        }
     }
 
     pub fn processEvent(
@@ -383,29 +411,22 @@ pub const Blk = struct {
         events: u32,
         userdata: u32,
     ) void {
-        var desc_used = false;
-
         if (events != linux.EPOLL.IN) return;
 
         switch (userdata) {
             REQUEST_Q1_EVT => {
-                desc_used = self.handleRequestQueue() catch |err| {
+                self.handleRequestQueue() catch |err| {
                     std.log.err("Failed to handle receive queue: {}", .{err});
                     return;
                 };
             },
             RING_EVT => {
-                desc_used = self.handleRingCompletions() catch |err| {
+                self.handleRingCompletions() catch |err| {
                     std.log.err("Failed to handle ring event: {}", .{err});
                     return;
                 };
             },
             else => unreachable,
-        }
-
-        if (desc_used) {
-            self.interrupt.trigger(Interrupt.VIRTIO_MMIO_INT_VRING) catch |err|
-                std.log.err("Failed to trigger interrupt: {}", .{err});
         }
     }
 

@@ -8,6 +8,7 @@ const Interrupt = @import("../transport/mmio.zig").Interrupt;
 const EventController = @import("../../EventController.zig");
 const GuestMemory = @import("../../GuestMemory.zig");
 const ioctl = @import("../../ioctl.zig");
+const DeviceFeatures = @import("flags.zig").DeviceFeatures;
 
 const iocgwinsz = ioctl.IoctlR(std.posix.T.IOCGWINSZ, std.posix.winsize);
 
@@ -41,6 +42,7 @@ pub const Console = struct {
     queues: [2]Queue,
     interrupt: Interrupt,
     active: bool = false,
+    acked_features: u64,
 
     stdout: std.fs.File,
     stdin: std.fs.File,
@@ -80,6 +82,7 @@ pub const Console = struct {
         _ = try iocgwinsz(stdout.handle, &winsize);
 
         self.* = .{
+            .acked_features = 0,
             .sigwinch_signalfd = sigwinch_signalfd,
             .gpa = gpa,
             .guest_memory = guest_memory,
@@ -102,9 +105,11 @@ pub const Console = struct {
                 .getInterrupt = getInterrupt,
                 .getQueue = getQueue,
                 .getQueues = getQueues,
+                .supportedFeatures = supportedFeatures,
+                .getAckedFeatures = getAckedFeatures,
+                .setAckedFeatures = setAckedFeatures,
                 .readConfig = readConfig,
                 .writeConfig = writeConfig,
-                .supportedFeatures = supportedFeatures,
                 .isActive = isActive,
                 .activate = activate,
                 .registerEvents = registerEvents,
@@ -130,6 +135,16 @@ pub const Console = struct {
     pub fn getQueues(d: *Device) []Queue {
         const self: *Console = @alignCast(@fieldParentPtr("interface", d));
         return &self.queues;
+    }
+
+    pub fn getAckedFeatures(d: *Device) u64 {
+        const self: *Console = @alignCast(@fieldParentPtr("interface", d));
+        return self.acked_features;
+    }
+
+    pub fn setAckedFeatures(d: *Device, features: u64) void {
+        const self: *Console = @alignCast(@fieldParentPtr("interface", d));
+        self.acked_features = features;
     }
 
     pub fn readConfig(d: *Device, offset: u64, data: []u8) Device.Error!void {
@@ -160,7 +175,7 @@ pub const Console = struct {
 
     pub fn supportedFeatures(d: *Device) u64 {
         _ = d;
-        return Features.VIRTIO_CONSOLE_F_SIZE;
+        return Features.VIRTIO_CONSOLE_F_SIZE | DeviceFeatures.VIRTIO_F_EVENT_IDX;
     }
 
     pub fn isActive(d: *Device) bool {
@@ -171,12 +186,16 @@ pub const Console = struct {
     pub fn activate(d: *Device, guest_memory: GuestMemory) Device.Error!void {
         const self: *Console = @alignCast(@fieldParentPtr("interface", d));
         for (&self.queues) |*queue| {
+            if (self.acked_features & DeviceFeatures.VIRTIO_F_EVENT_IDX != 0) {
+                queue.notification_supression = true;
+            }
+
             try queue.activate(guest_memory);
         }
         try self.interrupt.trigger(Interrupt.VIRTIO_MMIO_INT_CONFIG);
     }
 
-    fn handleReceiveQueue(self: *Console) !bool {
+    fn handleReceiveQueue(self: *Console) !void {
         try self.queues[RECEIVE_Q0].eventfd.read();
         var used_desc = false;
         const queue = &self.queues[RECEIVE_Q0];
@@ -194,12 +213,15 @@ pub const Console = struct {
             self.buffer.items.len = new_len;
         }
 
-        return used_desc;
+        if (used_desc and queue.prepareKick()) {
+            self.interrupt.trigger(Interrupt.VIRTIO_MMIO_INT_VRING) catch |err|
+                std.log.err("Failed to trigger interrupt: {}", .{err});
+        }
     }
 
     fn handleTransmitQueue(
         self: *Console,
-    ) !bool {
+    ) !void {
         try self.queues[TRANSMIT_Q0].eventfd.read();
 
         var used_desc = false;
@@ -226,15 +248,18 @@ pub const Console = struct {
             desc = next;
         }
 
-        return used_desc;
+        if (used_desc and queue.prepareKick()) {
+            self.interrupt.trigger(Interrupt.VIRTIO_MMIO_INT_VRING) catch |err|
+                std.log.err("Failed to trigger interrupt: {}", .{err});
+        }
     }
 
-    fn handleStdin(self: *Console) !bool {
+    fn handleStdin(self: *Console) !void {
         var buffer: [1024]u8 = undefined;
         const count = try self.stdin.read(&buffer);
         try self.buffer.appendSlice(self.gpa, buffer[0..count]);
 
-        return self.handleReceiveQueue();
+        try self.handleReceiveQueue();
     }
 
     fn handleSigwinch(self: *Console) !void {
@@ -252,25 +277,23 @@ pub const Console = struct {
         events: u32,
         userdata: u32,
     ) void {
-        var desc_used = false;
-
         if (events != linux.EPOLL.IN) return;
 
         switch (userdata) {
             RECEIVE_Q0_EVT => {
-                desc_used = self.handleReceiveQueue() catch |err| {
+                self.handleReceiveQueue() catch |err| {
                     std.log.err("Failed to handle receive queue: {}", .{err});
                     return;
                 };
             },
             TRANSMIT_Q0_EVT => {
-                desc_used = self.handleTransmitQueue() catch |err| {
+                self.handleTransmitQueue() catch |err| {
                     std.log.err("Failed to handle transmit queue: {}", .{err});
                     return;
                 };
             },
             STDIN_EVT => {
-                desc_used = self.handleStdin() catch |err| {
+                self.handleStdin() catch |err| {
                     std.log.err("Failed to handle stdin: {}", .{err});
                     return;
                 };
@@ -282,11 +305,6 @@ pub const Console = struct {
                 };
             },
             else => unreachable,
-        }
-
-        if (desc_used) {
-            self.interrupt.trigger(Interrupt.VIRTIO_MMIO_INT_VRING) catch |err|
-                std.log.err("Failed to trigger interrupt: {}", .{err});
         }
     }
 
