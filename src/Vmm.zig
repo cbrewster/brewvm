@@ -267,11 +267,11 @@ pub fn addVirtioConsole(self: *Self) !void {
     try self.mmio_devices.append(self.gpa, mmio_device);
 }
 
-pub fn addBlkDevice(self: *Self, path: []const u8) !void {
+pub fn addBlkDevice(self: *Self, serial: []const u8, path: []const u8) !void {
     // TODO: Deinit devices, leaking atm!
     var blk = try self.gpa.create(Blk);
     errdefer self.gpa.destroy(blk);
-    try blk.init(self.gpa, self.guest_memory, path);
+    try blk.init(self.gpa, self.guest_memory, serial, path);
     var mmio_device = mmio.MmioTransport.init(
         self.guest_memory,
         6,

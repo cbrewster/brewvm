@@ -110,10 +110,13 @@ pub const Blk = struct {
 
     acked_features: u64,
 
+    serial: []const u8,
+
     pub fn init(
         self: *Blk,
         gpa: std.mem.Allocator,
         guest_memory: GuestMemory,
+        serial: []const u8,
         path: []const u8,
     ) !void {
         var interrupt = try Interrupt.init();
@@ -157,6 +160,7 @@ pub const Blk = struct {
         config.seg_max = SEG_MAX;
 
         self.* = .{
+            .serial = serial,
             .gpa = gpa,
             .guest_memory = guest_memory,
             .queues = .{try Queue.init(256)},
@@ -285,62 +289,75 @@ pub const Blk = struct {
 
             var status = RequestStatus.OK;
             var async = false;
-            if (req.type == RequestType.IN) {
-                const write_iovec_len = try writer.slice(
-                    self.guest_memory,
-                    iovecs[iovec_idx..],
-                    0,
-                    writer.size - 1,
-                );
+            switch (req.type) {
+                RequestType.IN => {
+                    const write_iovec_len = try writer.slice(
+                        self.guest_memory,
+                        iovecs[iovec_idx..],
+                        0,
+                        writer.size - 1,
+                    );
 
-                const write_iovecs = iovecs[iovec_idx..][0..write_iovec_len];
-                iovec_idx += write_iovec_len;
-                if (write_iovec_len == 0) {
-                    return error.FailedToGetIovecs;
-                }
+                    const write_iovecs = iovecs[iovec_idx..][0..write_iovec_len];
+                    iovec_idx += write_iovec_len;
+                    if (write_iovec_len == 0) {
+                        return error.FailedToGetIovecs;
+                    }
 
-                async = true;
-                _ = self.ring.read(d.idx, self.file, .{ .iovecs = write_iovecs }, offset) catch |err| blk: {
-                    std.log.err("Failed to queue file read: {}", .{err});
-                    async = false;
-                    status = RequestStatus.IOERR;
-                    break :blk null;
-                };
-                should_submit_ring = true;
-            } else if (req.type == RequestType.OUT) {
-                var reader = d.reader();
+                    async = true;
+                    _ = self.ring.read(d.idx, self.file, .{ .iovecs = write_iovecs }, offset) catch |err| blk: {
+                        std.log.err("Failed to queue file read: {}", .{err});
+                        async = false;
+                        status = RequestStatus.IOERR;
+                        break :blk null;
+                    };
+                    should_submit_ring = true;
+                },
+                RequestType.OUT => {
+                    var reader = d.reader();
 
-                const read_iovec_len = try reader.slice(
-                    self.guest_memory,
-                    ciovecs[ciovec_idx..],
-                    Request.HEADER_LEN,
-                    reader.size - Request.HEADER_LEN,
-                );
-                if (read_iovec_len == 0) {
-                    return error.FailedToGetIovecs;
-                }
-                const read_iovecs = ciovecs[ciovec_idx..][0..read_iovec_len];
-                ciovec_idx += read_iovec_len;
+                    const read_iovec_len = try reader.slice(
+                        self.guest_memory,
+                        ciovecs[ciovec_idx..],
+                        Request.HEADER_LEN,
+                        reader.size - Request.HEADER_LEN,
+                    );
+                    if (read_iovec_len == 0) {
+                        return error.FailedToGetIovecs;
+                    }
+                    const read_iovecs = ciovecs[ciovec_idx..][0..read_iovec_len];
+                    ciovec_idx += read_iovec_len;
 
-                async = true;
-                _ = self.ring.writev(d.idx, self.file, read_iovecs, offset) catch |err| blk: {
-                    std.log.err("Failed to queue file write: {}", .{err});
-                    async = false;
-                    status = RequestStatus.IOERR;
-                    break :blk null;
-                };
-                should_submit_ring = true;
-            } else if (req.type == RequestType.FLUSH) {
-                async = true;
-                _ = self.ring.fsync(d.idx, self.file, 0) catch |err| blk: {
-                    std.log.err("Failed to queue file fsync: {}", .{err});
-                    async = false;
-                    status = RequestStatus.IOERR;
-                    break :blk null;
-                };
-                should_submit_ring = true;
-            } else {
-                status = RequestStatus.UNSUPP;
+                    async = true;
+                    _ = self.ring.writev(d.idx, self.file, read_iovecs, offset) catch |err| blk: {
+                        std.log.err("Failed to queue file write: {}", .{err});
+                        async = false;
+                        status = RequestStatus.IOERR;
+                        break :blk null;
+                    };
+                    should_submit_ring = true;
+                },
+                RequestType.FLUSH => {
+                    async = true;
+                    _ = self.ring.fsync(d.idx, self.file, 0) catch |err| blk: {
+                        std.log.err("Failed to queue file fsync: {}", .{err});
+                        async = false;
+                        status = RequestStatus.IOERR;
+                        break :blk null;
+                    };
+                    should_submit_ring = true;
+                },
+                RequestType.GET_ID => {
+                    var id = std.mem.zeroes([20]u8);
+                    const len = @min(id.len, self.serial.len);
+                    @memcpy(id[0..len], self.serial[0..len]);
+                    writer.write(self.guest_memory, &id);
+                    status = RequestStatus.OK;
+                },
+                else => {
+                    std.log.err("Unhandled request type: {}", .{req.type});
+                    status = RequestStatus.UNSUPP;
+                },
             }
 
             if (!async) {

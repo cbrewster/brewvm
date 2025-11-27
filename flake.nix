@@ -34,6 +34,7 @@
         pkgs.iputils
         pkgs.less
         pkgs.e2fsprogs
+        pkgs.eudev
       ];
       initrdBinPath = lib.makeBinPath initrdPackages;
       initScript = pkgs.writeScript "brewvm-init" ''
